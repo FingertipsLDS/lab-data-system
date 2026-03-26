@@ -1,5 +1,6 @@
 import { useStore } from './stores/appStore';
 import { LoginScreen } from './components/LoginScreen';
+import { UpdateChecker } from './components/UpdateChecker';
 import App from './App';
 import { useAppInit } from './utils/useAppInit';
 
@@ -27,5 +28,10 @@ export default function AppShell() {
     );
   }
 
-  return <App />;
+  return (
+    <>
+      <UpdateChecker />
+      <App />
+    </>
+  );
 }
