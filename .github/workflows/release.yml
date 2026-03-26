@@ -5,27 +5,11 @@ on:
     tags:
       - 'v*'
 
-jobs:
-  create-release:
-    runs-on: ubuntu-latest
-    outputs:
-      release_id: ${{ steps.create-release.outputs.id }}
-    steps:
-      - uses: actions/checkout@v4
-      - name: Create Release
-        id: create-release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tag_name: ${{ github.ref_name }}
-          release_name: 'Lab Data System ${{ github.ref_name }}'
-          body: '请查看更新日志了解详情。'
-          draft: false
-          prerelease: false
+permissions:
+  contents: write
 
+jobs:
   build:
-    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -68,5 +52,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
-          args: ${{ matrix.args }}
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Lab Data System ${{ github.ref_name }}'
+          releaseBody: '新版本已发布，请下载安装。'
+          releaseDraft: false
+          prerelease: false
