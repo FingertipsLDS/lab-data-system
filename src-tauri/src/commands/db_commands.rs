@@ -1,11 +1,10 @@
 use rusqlite::params;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use std::sync::Mutex;
 use tauri::State;
 
 pub struct DbState(pub Mutex<rusqlite::Connection>);
 
-// ─── 通用 JSON 行类型 ───
 type Row = serde_json::Map<String, serde_json::Value>;
 
 fn rows_from_stmt(stmt: &mut rusqlite::Statement, p: &[&dyn rusqlite::types::ToSql]) -> Result<Vec<Row>, String> {
@@ -28,9 +27,14 @@ fn rows_from_stmt(stmt: &mut rusqlite::Statement, p: &[&dyn rusqlite::types::ToS
     rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
 }
 
-// ═══════════════════════════════════════
-// Projects
-// ═══════════════════════════════════════
+// ═══ Projects ═══
+
+#[derive(Deserialize)]
+pub struct NewProject {
+    pub id: String, pub name: String, pub code: String, pub direction: String,
+    pub keywords: String, pub description: String, pub leader: String,
+    pub start_date: String, pub end_date: String, pub status: String, pub milestones: String,
+}
 
 #[tauri::command]
 pub fn get_projects(db: State<DbState>) -> Result<Vec<Row>, String> {
@@ -45,13 +49,6 @@ pub fn get_project(db: State<DbState>, id: String) -> Result<Option<Row>, String
     let mut stmt = conn.prepare("SELECT * FROM projects WHERE id = ?1").map_err(|e| e.to_string())?;
     let rows = rows_from_stmt(&mut stmt, &[&id])?;
     Ok(rows.into_iter().next())
-}
-
-#[derive(Deserialize)]
-pub struct NewProject {
-    pub id: String, pub name: String, pub code: String, pub direction: String,
-    pub keywords: String, pub description: String, pub leader: String,
-    pub start_date: String, pub end_date: String, pub status: String, pub milestones: String,
 }
 
 #[tauri::command]
@@ -83,9 +80,7 @@ pub fn delete_project(db: State<DbState>, id: String) -> Result<(), String> {
     Ok(())
 }
 
-// ═══════════════════════════════════════
-// Experiments
-// ═══════════════════════════════════════
+// ═══ Experiments ═══
 
 #[derive(Deserialize)]
 pub struct NewExperiment {
@@ -131,9 +126,14 @@ pub fn update_experiment(db: State<DbState>, id: String, title: String, r#type: 
     Ok(())
 }
 
-// ═══════════════════════════════════════
-// Results
-// ═══════════════════════════════════════
+#[tauri::command]
+pub fn delete_experiment(db: State<DbState>, id: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM experiments WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ═══ Results ═══
 
 #[tauri::command]
 pub fn get_results(db: State<DbState>) -> Result<Vec<Row>, String> {
@@ -153,9 +153,14 @@ pub fn create_result(db: State<DbState>, id: String, experiment_id: String, proj
     Ok(())
 }
 
-// ═══════════════════════════════════════
-// Tasks
-// ═══════════════════════════════════════
+#[tauri::command]
+pub fn delete_result(db: State<DbState>, id: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM results WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ═══ Tasks ═══
 
 #[tauri::command]
 pub fn get_tasks(db: State<DbState>) -> Result<Vec<Row>, String> {
@@ -188,9 +193,7 @@ pub fn delete_task(db: State<DbState>, id: String) -> Result<(), String> {
     Ok(())
 }
 
-// ═══════════════════════════════════════
-// References
-// ═══════════════════════════════════════
+// ═══ References ═══
 
 #[tauri::command]
 pub fn get_references(db: State<DbState>) -> Result<Vec<Row>, String> {
@@ -210,9 +213,14 @@ pub fn create_reference(db: State<DbState>, id: String, title: String, doi: Stri
     Ok(())
 }
 
-// ═══════════════════════════════════════
-// Files (metadata only)
-// ═══════════════════════════════════════
+#[tauri::command]
+pub fn delete_reference(db: State<DbState>, id: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute("DELETE FROM references_table WHERE id = ?1", params![id]).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+// ═══ Files ═══
 
 #[tauri::command]
 pub fn get_files(db: State<DbState>) -> Result<Vec<Row>, String> {
@@ -221,9 +229,7 @@ pub fn get_files(db: State<DbState>) -> Result<Vec<Row>, String> {
     rows_from_stmt(&mut stmt, &[])
 }
 
-// ═══════════════════════════════════════
-// Templates
-// ═══════════════════════════════════════
+// ═══ Templates ═══
 
 #[tauri::command]
 pub fn get_templates(db: State<DbState>) -> Result<Vec<Row>, String> {
@@ -232,9 +238,7 @@ pub fn get_templates(db: State<DbState>) -> Result<Vec<Row>, String> {
     rows_from_stmt(&mut stmt, &[])
 }
 
-// ═══════════════════════════════════════
-// Search
-// ═══════════════════════════════════════
+// ═══ Search ═══
 
 #[tauri::command]
 pub fn search_all(db: State<DbState>, query: String) -> Result<Vec<Row>, String> {

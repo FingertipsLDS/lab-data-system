@@ -23,8 +23,7 @@ pub fn run() {
             println!("[BioLab] 数据目录: {:?}", data_dir);
 
             let db_path = data_dir.join("biolab.db");
-            let conn = rusqlite::Connection::open(&db_path)
-                .expect("无法打开数据库文件");
+            let conn = rusqlite::Connection::open(&db_path).expect("无法打开数据库文件");
             conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").ok();
             println!("[BioLab] 数据库已打开");
 
@@ -36,36 +35,31 @@ pub fn run() {
             }
 
             app.manage(DbState(Mutex::new(conn)));
-            println!("[BioLab] 数据库连接已注入应用状态");
+            println!("[BioLab] 就绪");
 
             let h = app.handle().clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = commands::backup_commands::auto_backup_if_needed(h).await {
-                    eprintln!("[BioLab] 自动备份失败: {}", e);
-                }
+                if let Err(e) = commands::backup_commands::auto_backup_if_needed(h).await { eprintln!("[BioLab] 自动备份失败: {}", e); }
             });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            // 安全
             commands::security_commands::has_launch_password, commands::security_commands::verify_launch_password,
             commands::security_commands::set_launch_password, commands::security_commands::clear_launch_password,
             commands::security_commands::rekey_database, commands::security_commands::store_api_key, commands::security_commands::get_api_key,
-            // 迁移
             commands::migration_commands::get_migration_status, commands::migration_commands::acknowledge_migration_error, commands::migration_commands::dismiss_upgrade_notice,
-            // 备份
             commands::backup_commands::create_full_backup, commands::backup_commands::restore_from_backup, commands::backup_commands::auto_backup_if_needed,
-            // 用户
             commands::user_commands::check_has_users, commands::user_commands::get_user_list,
             commands::user_commands::register_user, commands::user_commands::login_user,
-            commands::user_commands::get_data_dir, commands::user_commands::set_custom_data_dir, commands::user_commands::get_custom_data_dir,
-            // 数据库 CRUD
+            commands::user_commands::get_data_dir, commands::user_commands::set_custom_data_dir, commands::user_commands::get_custom_data_dir, commands::user_commands::change_password,
             commands::db_commands::get_projects, commands::db_commands::get_project, commands::db_commands::create_project, commands::db_commands::update_project, commands::db_commands::delete_project,
-            commands::db_commands::get_experiments, commands::db_commands::get_experiments_by_project, commands::db_commands::create_experiment, commands::db_commands::update_experiment,
-            commands::db_commands::get_results, commands::db_commands::create_result,
+            commands::db_commands::get_experiments, commands::db_commands::get_experiments_by_project, commands::db_commands::create_experiment, commands::db_commands::update_experiment, commands::db_commands::delete_experiment,
+            commands::db_commands::get_results, commands::db_commands::create_result, commands::db_commands::delete_result,
             commands::db_commands::get_tasks, commands::db_commands::create_task, commands::db_commands::update_task, commands::db_commands::delete_task,
-            commands::db_commands::get_references, commands::db_commands::create_reference,
+            commands::db_commands::get_references, commands::db_commands::create_reference, commands::db_commands::delete_reference,
             commands::db_commands::get_files, commands::db_commands::get_templates, commands::db_commands::search_all,
+            commands::file_commands::import_files_to_experiment, commands::file_commands::get_experiment_files,
+            commands::file_commands::delete_experiment_file, commands::file_commands::open_file, commands::file_commands::read_file_base64,
         ])
         .run(tauri::generate_context!()).expect("Lab Data System 启动失败");
 }

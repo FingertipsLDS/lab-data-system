@@ -7,21 +7,14 @@ export function UpdateChecker() {
   const [progress, setProgress] = useState(0);
   const [dismissed, setDismissed] = useState(false);
 
-  useEffect(() => {
-    checkForUpdate();
-  }, []);
+  useEffect(() => { checkForUpdate(); }, []);
 
   async function checkForUpdate() {
     try {
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check();
-      if (update) {
-        setUpdateInfo({ version: update.version, body: update.body || '新版本已发布，建议更新。' });
-        setUpdateAvailable(true);
-      }
-    } catch (e) {
-      console.log('[Update] 检查更新失败或无更新:', e);
-    }
+      if (update) { setUpdateInfo({ version: update.version, body: update.body || '新版本已发布' }); setUpdateAvailable(true); }
+    } catch {}
   }
 
   async function doUpdate() {
@@ -30,103 +23,36 @@ export function UpdateChecker() {
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check();
       if (update) {
-        let totalSize = 0;
-        let downloaded = 0;
-        await update.downloadAndInstall((event) => {
-          if (event.event === 'Started' && event.data.contentLength) {
-            totalSize = event.data.contentLength;
-          } else if (event.event === 'Progress') {
-            downloaded += event.data.chunkLength;
-            if (totalSize > 0) setProgress(Math.round((downloaded / totalSize) * 100));
-          } else if (event.event === 'Finished') {
-            setProgress(100);
-          }
+        let total = 0, dl = 0;
+        await update.downloadAndInstall((e) => {
+          if (e.event === 'Started' && e.data.contentLength) total = e.data.contentLength;
+          else if (e.event === 'Progress') { dl += e.data.chunkLength; if (total > 0) setProgress(Math.round((dl / total) * 100)); }
+          else if (e.event === 'Finished') setProgress(100);
         });
-        // 安装完成后重启
         const { relaunch } = await import('@tauri-apps/plugin-process');
         await relaunch();
       }
-    } catch (e: any) {
-      alert('更新失败: ' + e.toString());
-      setDownloading(false);
-    }
+    } catch (e: any) { alert('更新失败: ' + e); setDownloading(false); }
   }
 
   if (!updateAvailable || dismissed) return null;
 
   return (
-    <div style={styles.overlay}>
-      <div style={styles.card}>
-        <div style={styles.iconRow}>
-          <span style={{ fontSize: 36 }}>🔄</span>
-        </div>
-        <h2 style={styles.title}>发现新版本</h2>
-        <div style={styles.version}>v{updateInfo?.version}</div>
-        <div style={styles.body}>{updateInfo?.body}</div>
-
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(8px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 10000, fontFamily: "'Inter','Noto Sans SC',sans-serif" }}>
+      <div style={{ background: '#181d27', borderRadius: 10, padding: 28, width: 380, boxShadow: '0 20px 60px rgba(0,0,0,0.5)', border: '1px solid rgba(255,255,255,0.06)', textAlign: 'center' }}>
+        <div style={{ fontSize: 28, marginBottom: 10 }}>🔄</div>
+        <h2 style={{ fontSize: 16, fontWeight: 700, color: '#e2e8f0', marginBottom: 3 }}>发现新版本</h2>
+        <div style={{ fontSize: 13, color: '#63b3ed', fontWeight: 600, marginBottom: 14 }}>v{updateInfo?.version}</div>
+        <div style={{ fontSize: 12.5, color: '#8892a4', lineHeight: 1.7, textAlign: 'left', background: 'rgba(255,255,255,0.03)', borderRadius: 6, padding: '10px 14px', marginBottom: 18, maxHeight: 120, overflow: 'auto', whiteSpace: 'pre-wrap', border: '1px solid rgba(255,255,255,0.04)' }}>{updateInfo?.body}</div>
         {downloading ? (
-          <div style={styles.progressSection}>
-            <div style={styles.progressBar}>
-              <div style={{ ...styles.progressFill, width: `${progress}%` }} />
-            </div>
-            <div style={styles.progressText}>下载中... {progress}%</div>
-          </div>
+          <div><div style={{ height: 6, background: 'rgba(255,255,255,0.06)', borderRadius: 3, overflow: 'hidden' }}><div style={{ height: '100%', background: '#63b3ed', borderRadius: 3, width: `${progress}%`, transition: 'width 0.3s', boxShadow: '0 0 10px rgba(99,179,237,0.3)' }} /></div><div style={{ fontSize: 12, color: '#5a6478', marginTop: 6 }}>下载中... {progress}%</div></div>
         ) : (
-          <div style={styles.buttons}>
-            <button style={styles.laterBtn} onClick={() => setDismissed(true)}>
-              暂不更新
-            </button>
-            <button style={styles.updateBtn} onClick={doUpdate}>
-              立即更新
-            </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setDismissed(true)} style={{ flex: 1, padding: '8px 0', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', background: 'transparent', color: '#8892a4', fontSize: 13, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit' }}>暂不更新</button>
+            <button onClick={doUpdate} style={{ flex: 1, padding: '8px 0', borderRadius: 6, border: 'none', background: '#3a8fd4', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', boxShadow: '0 0 12px rgba(99,179,237,0.15)' }}>立即更新</button>
           </div>
         )}
       </div>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  overlay: {
-    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-    background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(4px)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    zIndex: 10000,
-    fontFamily: "'Noto Sans SC', -apple-system, sans-serif",
-  },
-  card: {
-    background: '#fff', borderRadius: 16, padding: '32px',
-    width: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.2)',
-    textAlign: 'center' as const,
-  },
-  iconRow: { marginBottom: 12 },
-  title: { fontSize: 20, fontWeight: 700, color: '#111827', marginBottom: 4 },
-  version: { fontSize: 14, color: '#2563eb', fontWeight: 600, marginBottom: 16 },
-  body: {
-    fontSize: 14, color: '#6b7280', lineHeight: 1.7,
-    textAlign: 'left' as const, background: '#f9fafb',
-    borderRadius: 8, padding: '12px 16px', marginBottom: 20,
-    maxHeight: 150, overflow: 'auto', whiteSpace: 'pre-wrap' as const,
-  },
-  buttons: { display: 'flex', gap: 10 },
-  laterBtn: {
-    flex: 1, padding: '10px 0', borderRadius: 8,
-    border: '1px solid #d1d5db', background: '#fff',
-    color: '#374151', fontSize: 14, fontWeight: 600,
-    cursor: 'pointer', fontFamily: 'inherit',
-  },
-  updateBtn: {
-    flex: 1, padding: '10px 0', borderRadius: 8,
-    border: 'none', background: '#2563eb', color: '#fff',
-    fontSize: 14, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit',
-  },
-  progressSection: { marginTop: 8 },
-  progressBar: {
-    height: 8, background: '#e5e7eb', borderRadius: 4, overflow: 'hidden' as const,
-  },
-  progressFill: {
-    height: '100%', background: '#2563eb', borderRadius: 4,
-    transition: 'width 0.3s',
-  },
-  progressText: { fontSize: 13, color: '#6b7280', marginTop: 8 },
-};

@@ -1,639 +1,1703 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+// @ts-nocheck
+import React from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useStore } from './stores/appStore';
 import { formatDate, formatFileSize, STATUS_COLORS, STATUS_BG, FILE_ICONS } from './utils/formatters';
-import { Home, FolderOpen, FlaskConical, BarChart3, FileText, BookOpen, LayoutTemplate, CheckSquare, Search, Plus, ArrowLeft, ChevronRight, X, Settings, Calendar, Link2, Trash2 } from 'lucide-react';
+import { FileUploadZone } from './components/FileUploadZone';
+import { PDFReader } from './components/PDFReader';
+import { Home, FolderOpen, FlaskConical, BarChart3, BookOpen, LayoutTemplate, Search, Plus, ArrowLeft, X, Settings, Calendar, Trash2, LogOut, Archive, FileText, ChevronRight } from 'lucide-react';
 import './App.css';
+import { BioBackground } from './components/BioBackground';
 
-// ═══════════════════════════════════════
-// Badge Component
-// ═══════════════════════════════════════
+// ═══ Custom Dialog ═══
+let _dialogResolve: ((v: string | boolean | null) => void) | null = null;
+let _setDialog: ((d: any) => void) | null = null;
+
+function showAlert(msg: string) {
+  return new Promise<boolean>(resolve => {
+    _dialogResolve = resolve;
+    _setDialog?.({ type: 'alert', msg });
+  });
+}
+function showConfirm(msg: string) {
+  return new Promise<boolean>(resolve => {
+    _dialogResolve = resolve;
+    _setDialog?.({ type: 'confirm', msg });
+  });
+}
+function showPrompt(msg: string, defaultVal = '') {
+  return new Promise<string | null>(resolve => {
+    _dialogResolve = resolve;
+    _setDialog?.({ type: 'prompt', msg, defaultVal });
+  });
+}
+
+function DialogHost() {
+  const [dlg, setDlg] = useState<any>(null);
+  const [inputVal, setInputVal] = useState('');
+  _setDialog = (d: any) => { setDlg(d); if (d?.defaultVal) setInputVal(d.defaultVal); else setInputVal(''); };
+
+  const close = (result: any) => { setDlg(null); _dialogResolve?.(result); _dialogResolve = null; };
+
+  if (!dlg) return null;
+  return (
+    <div style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.6)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:999999 }} onClick={() => close(dlg.type === 'prompt' ? null : false)}>
+      <div style={{ background:'#1a1f2e', border:'1px solid rgba(125,211,252,0.15)', borderRadius:12, padding:'24px 28px', minWidth:300, maxWidth:400, boxShadow:'0 20px 60px rgba(0,0,0,0.5)' }} onClick={e => e.stopPropagation()}>
+        <div style={{ fontSize:14, color:'#f1f5f9', lineHeight:1.6, marginBottom:18, whiteSpace:'pre-wrap' }}>{dlg.msg}</div>
+        {dlg.type === 'prompt' && (
+          <input style={{ width:'100%', padding:'8px 12px', background:'rgba(255,255,255,0.04)', border:'1px solid rgba(125,211,252,0.15)', borderRadius:6, color:'#f1f5f9', fontSize:13, outline:'none', marginBottom:16, boxSizing:'border-box', fontFamily:'inherit' }} value={inputVal} onChange={e => setInputVal(e.target.value)} autoFocus onKeyDown={e => { if (e.key === 'Enter') close(inputVal); if (e.key === 'Escape') close(null); }} />
+        )}
+        <div style={{ display:'flex', gap:8, justifyContent:'flex-end' }}>
+          {dlg.type !== 'alert' && (
+            <div style={{ padding:'7px 20px', borderRadius:6, fontSize:13, color:'#718096', cursor:'pointer', border:'1px solid rgba(255,255,255,0.06)', transition:'all 0.2s' }} onClick={() => close(dlg.type === 'prompt' ? null : false)}>取消</div>
+          )}
+          <div style={{ padding:'7px 20px', borderRadius:6, fontSize:13, color:'#7dd3fc', cursor:'pointer', background:'rgba(125,211,252,0.1)', border:'1px solid rgba(125,211,252,0.2)', fontWeight:600, transition:'all 0.2s' }} onClick={() => close(dlg.type === 'prompt' ? inputVal : true)}>确定</div>
+        </div>
+      </div>
+    <DialogHost />
+    </div>
+  );
+}
+
+
 const Badge = ({ children, status }: { children: string; status?: string }) => (
-  <span className="badge" style={{ color: STATUS_COLORS[status || children] || '#6b7280', background: STATUS_BG[status || children] || '#f3f4f6' }}>
-    {children}
-  </span>
+  <span className="badge" style={{ color: STATUS_COLORS[status || children] || '#576178', background: STATUS_BG[status || children] || 'rgba(113,128,150,0.08)' }}>{children}</span>
 );
 
-// ═══════════════════════════════════════
-// Search Overlay
-// ═══════════════════════════════════════
+function NewButton({ onAction }: { onAction: (t: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
+  return (
+    <div className="new-btn-wrap" ref={ref}>
+      <button className="btn primary" onClick={() => setOpen(!open)}><Plus size={14} /> 新建</button>
+      {open && <div className="new-dropdown">
+        {[{ k: 'project', icon: <FolderOpen size={15} />, l: '新建课题' }, { k: 'experiment', icon: <FlaskConical size={15} />, l: '新建实验' }, { k: 'reference', icon: <BookOpen size={15} />, l: '添加文献' }].map(i => (
+          <div key={i.k} className="new-dropdown-item" onClick={() => { onAction(i.k); setOpen(false); }}>{i.icon}{i.l}</div>
+        ))}
+      </div>}
+    </div>
+  );
+}
+
 function SearchOverlay() {
-  const { searchQuery, setSearchQuery, setSearchOpen, navigateTo, projects, experiments, results, files, references } = useStore();
+  const { searchQuery, setSearchQuery, setSearchOpen, navigateTo, projects, experiments, results, references } = useStore();
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
-
-  const searchResults = useMemo(() => {
+  const sr = useMemo(() => {
     if (!searchQuery.trim()) return [];
-    const q = searchQuery.toLowerCase();
-    const r: { type: string; id: string; label: string; extra?: string }[] = [];
-    projects.forEach(p => { if (p.name.toLowerCase().includes(q) || p.direction?.toLowerCase().includes(q)) r.push({ type: '项目', id: p.id, label: p.name }); });
-    experiments.forEach(e => { if (e.title.toLowerCase().includes(q) || e.purpose?.toLowerCase().includes(q) || e.conclusion?.toLowerCase().includes(q)) r.push({ type: '实验', id: e.id, label: e.title, extra: e.projectId }); });
-    results.forEach(res => { if (res.title.toLowerCase().includes(q) || res.summary?.toLowerCase().includes(q)) r.push({ type: '结果', id: res.id, label: res.title }); });
-    files.forEach(f => { if (f.name.toLowerCase().includes(q)) r.push({ type: '文件', id: f.id, label: f.name }); });
+    const q = searchQuery.toLowerCase(); const r: any[] = [];
+    projects.forEach(p => { if (p.name.toLowerCase().includes(q)) r.push({ type: '课题', id: p.id, label: p.name }); });
+    experiments.forEach(e => { if (e.title.toLowerCase().includes(q)) r.push({ type: '实验', id: e.id, label: e.title, extra: e.projectId }); });
+    results.forEach(res => { if (res.title.toLowerCase().includes(q)) r.push({ type: '结果', id: res.id, label: res.title }); });
     references.forEach(ref => { if (ref.title.toLowerCase().includes(q)) r.push({ type: '文献', id: ref.id, label: ref.title }); });
-    return r.slice(0, 15);
-  }, [searchQuery, projects, experiments, results, files, references]);
-
+    return r.slice(0, 12);
+  }, [searchQuery, projects, experiments, results, references]);
   return (
     <div className="overlay" onClick={() => { setSearchOpen(false); setSearchQuery(''); }}>
       <div className="modal search-modal" onClick={e => e.stopPropagation()}>
-        <div className="search-input-wrap">
-          <Search size={18} color="#9ca3af" />
-          <input ref={inputRef} placeholder="搜索项目、实验、结果、文件..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} />
-          <span style={{ fontSize: 11, color: '#9ca3af', background: '#f3f4f6', padding: '2px 6px', borderRadius: 4 }}>ESC</span>
-        </div>
+        <div className="search-input-wrap"><Search size={16} color="#576178" /><input ref={inputRef} placeholder="搜索项目、实验、结果..." value={searchQuery} onChange={e => setSearchQuery(e.target.value)} /><span className="kbd-hint">ESC</span></div>
         <div className="search-results">
-          {searchQuery && searchResults.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#9ca3af' }}>未找到相关内容</div>}
-          {searchResults.map((r, i) => (
-            <div key={i} className="search-result-item" onClick={() => {
-              setSearchOpen(false); setSearchQuery('');
-              if (r.type === '项目') navigateTo('projectDetail', { projectId: r.id });
-              else if (r.type === '实验') navigateTo('experimentDetail', { experimentId: r.id, projectId: r.extra });
-              else if (r.type === '文件') navigateTo('files');
-              else if (r.type === '文献') navigateTo('references');
-            }}>
-              <span className="search-result-type">{r.type}</span>
-              <span style={{ flex: 1, fontSize: 14 }}>{r.label}</span>
-            </div>
-          ))}
+          {searchQuery && sr.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#3a4456' }}>未找到</div>}
+          {sr.map((r, i) => <div key={i} className="search-result-item" onClick={() => { setSearchOpen(false); setSearchQuery(''); if (r.type === '课题') navigateTo('projectDetail', { projectId: r.id }); else if (r.type === '实验') navigateTo('experimentDetail', { experimentId: r.id, projectId: r.extra }); else if (r.type === '结果') navigateTo('results'); else navigateTo('library'); }}><span className="search-result-type">{r.type}</span><span style={{ flex: 1 }}>{r.label}</span></div>)}
         </div>
       </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// New Project Modal
-// ═══════════════════════════════════════
+// ═══ Modals ═══
 function NewProjectModal({ onClose }: { onClose: () => void }) {
   const { addProject } = useStore();
-  const [form, setForm] = useState({ name: '', code: '', direction: '', keywords: '', description: '', leader: '', startDate: new Date().toISOString().slice(0,10), endDate: '', status: '进行中' as const, milestones: '' });
-  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
-  const submit = () => {
-    if (!form.name) return;
-    addProject({ ...form, keywords: form.keywords.split(',').map(s => s.trim()).filter(Boolean) } as any);
-    onClose();
-  };
+  const [f, sf] = useState({ name: '', code: '', direction: '', keywords: '', description: '', leader: '', startDate: new Date().toISOString().slice(0,10), endDate: '', status: '进行中', milestones: '' });
+  const s = (k: string, v: string) => sf(p => ({ ...p, [k]: v }));
+  return (<div className="overlay" onClick={onClose}><div className="modal" onClick={e => e.stopPropagation()}>
+    <div className="modal-header"><h2>新建课题</h2><X size={16} style={{ cursor: 'pointer', color: '#576178' }} onClick={onClose} /></div>
+    <div className="modal-body">
+      <div className="grid-2"><div className="form-group"><label>项目名称 *</label><input className="form-input" value={f.name} onChange={e => s('name', e.target.value)} autoFocus /></div><div className="form-group"><label>编号</label><input className="form-input" value={f.code} onChange={e => s('code', e.target.value)} /></div></div>
+      <div className="grid-2"><div className="form-group"><label>方向</label><input className="form-input" value={f.direction} onChange={e => s('direction', e.target.value)} /></div><div className="form-group"><label>负责人</label><input className="form-input" value={f.leader} onChange={e => s('leader', e.target.value)} /></div></div>
+      <div className="form-group"><label>关键词</label><input className="form-input" value={f.keywords} onChange={e => s('keywords', e.target.value)} placeholder="逗号分隔" /></div>
+      <div className="form-group"><label>简介</label><textarea className="form-textarea" value={f.description} onChange={e => s('description', e.target.value)} /></div>
+    </div>
+    <div className="modal-footer"><button className="btn" onClick={onClose}>取消</button><button className="btn primary" onClick={() => { if (f.name) { addProject(f as any); onClose(); } else showAlert('请填写课题名称'); }}>创建</button></div>
+  </div></div>);
+}
+function TemplateChooser({ onSelect, onClose }: { onSelect: (t: any) => void; onClose: () => void }) {
+  const { templates } = useStore();
+  return (<div className="overlay" onClick={onClose}><div className="modal sm" onClick={e => e.stopPropagation()}>
+    <div className="modal-header"><h2>选择实验</h2><X size={16} style={{ cursor: 'pointer', color: '#576178' }} onClick={onClose} /></div>
+    <div style={{ padding: '12px 18px', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 8 }}>
+      {templates.map(t => <div key={t.id} className="card template-card" style={{ marginBottom: 0 }} onClick={() => onSelect(t)}><div className="template-icon">{t.icon}</div><div className="template-name">{t.name}</div></div>)}
+      <div className="card template-card" style={{ marginBottom: 0, borderStyle: 'dashed' }} onClick={() => onSelect(null)}><div className="template-icon" style={{ opacity: 0.4 }}>📋</div><div className="template-name" style={{ color: '#576178' }}>空白</div></div>
+    </div>
+  </div></div>);
+}
+
+// ═══ Custom Dark Select ═══
+function DarkSelect({ value, onChange, options, placeholder }: { value: string; onChange: (v: string) => void; options: {value: string; label: string}[]; placeholder?: string }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const selected = options.find(o => o.value === value);
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal" onClick={e => e.stopPropagation()}>
-        <div className="modal-header"><h2>新建项目</h2><X size={18} style={{ cursor: 'pointer', color: '#9ca3af' }} onClick={onClose} /></div>
-        <div className="modal-body">
-          <div className="grid-2">
-            <div className="form-group"><label>项目名称 *</label><input className="form-input" value={form.name} onChange={e => set('name', e.target.value)} placeholder="例：琥珀酸代谢与抗肿瘤免疫" /></div>
-            <div className="form-group"><label>项目编号</label><input className="form-input" value={form.code} onChange={e => set('code', e.target.value)} placeholder="PRJ-2025-001" /></div>
-          </div>
-          <div className="grid-2">
-            <div className="form-group"><label>研究方向</label><input className="form-input" value={form.direction} onChange={e => set('direction', e.target.value)} /></div>
-            <div className="form-group"><label>负责人</label><input className="form-input" value={form.leader} onChange={e => set('leader', e.target.value)} /></div>
-          </div>
-          <div className="form-group"><label>关键词（逗号分隔）</label><input className="form-input" value={form.keywords} onChange={e => set('keywords', e.target.value)} /></div>
-          <div className="form-group"><label>项目简介</label><textarea className="form-textarea" value={form.description} onChange={e => set('description', e.target.value)} /></div>
-          <div className="grid-3">
-            <div className="form-group"><label>开始日期</label><input type="date" className="form-input" value={form.startDate} onChange={e => set('startDate', e.target.value)} /></div>
-            <div className="form-group"><label>结束日期</label><input type="date" className="form-input" value={form.endDate} onChange={e => set('endDate', e.target.value)} /></div>
-            <div className="form-group"><label>状态</label><select className="form-select" value={form.status} onChange={e => set('status', e.target.value)}><option>进行中</option><option>暂停</option><option>已完成</option></select></div>
-          </div>
-          <div className="form-group"><label>里程碑</label><textarea className="form-textarea" value={form.milestones} onChange={e => set('milestones', e.target.value)} placeholder="M1: ..." /></div>
-        </div>
-        <div className="modal-footer"><button className="btn" onClick={onClose}>取消</button><button className="btn primary" onClick={submit}>创建项目</button></div>
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div onClick={() => setOpen(!open)} style={{
+        padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+        background: 'rgba(255,255,255,0.03)', border: '1px solid ' + (open ? 'rgba(125,211,252,0.35)' : 'rgba(125,211,252,0.12)'),
+        color: selected ? '#f1f5f9' : '#4a5568', fontSize: 13,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        transition: 'all 0.25s', boxShadow: open ? '0 0 0 3px rgba(125,211,252,0.06)' : 'none',
+      }}>
+        <span>{selected ? selected.label : (placeholder || '请选择')}</span>
+        <span style={{ color: '#7dd3fc', fontSize: 10, transform: open ? 'rotate(180deg)' : '', transition: 'transform 0.2s' }}>▼</span>
       </div>
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, zIndex: 100,
+          background: '#1a1f2e', border: '1px solid rgba(125,211,252,0.15)', borderRadius: 8,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.5)', maxHeight: 200, overflowY: 'auto',
+          padding: 4,
+        }}>
+          {options.map(o => (
+            <div key={o.value} onClick={() => { onChange(o.value); setOpen(false); }} style={{
+              padding: '8px 12px', borderRadius: 4, cursor: 'pointer', fontSize: 12,
+              color: o.value === value ? '#7dd3fc' : '#a0aec0',
+              background: o.value === value ? 'rgba(125,211,252,0.08)' : 'transparent',
+              transition: 'all 0.15s',
+            }}
+            onMouseEnter={e => { if (o.value !== value) e.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+            onMouseLeave={e => { if (o.value !== value) e.currentTarget.style.background = 'transparent'; }}
+            >{o.label}</div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// Template Chooser + New Experiment Modal
-// ═══════════════════════════════════════
-function TemplateChooser({ onSelect, onClose }: { onSelect: (t: any) => void; onClose: () => void }) {
-  const { templates } = useStore();
+// ═══ Custom Dark Date Picker ═══
+function DarkDatePicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  const parsed = value ? new Date(value + 'T00:00:00') : new Date();
+  const [vY, setVY] = useState(parsed.getFullYear());
+  const [vM, setVM] = useState(parsed.getMonth());
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const daysIn = new Date(vY, vM + 1, 0).getDate();
+  const first = new Date(vY, vM, 1).getDay();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const today = new Date();
+  const todayStr = today.getFullYear() + '-' + pad(today.getMonth() + 1) + '-' + pad(today.getDate());
+
+  const pick = (d: number) => {
+    const str = vY + '-' + pad(vM + 1) + '-' + pad(d);
+    onChange(str);
+    setOpen(false);
+  };
+
+  const prev = () => { if (vM === 0) { setVY(vY - 1); setVM(11); } else setVM(vM - 1); };
+  const next = () => { if (vM === 11) { setVY(vY + 1); setVM(0); } else setVM(vM + 1); };
+
+  const displayVal = value || '选择日期';
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal sm" onClick={e => e.stopPropagation()}>
-        <div className="modal-header"><h2>选择实验模板</h2><X size={18} style={{ cursor: 'pointer', color: '#9ca3af' }} onClick={onClose} /></div>
-        <div style={{ padding: '16px 24px', display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 12 }}>
-          {templates.map(t => (
-            <div key={t.id} className="card template-card" onClick={() => onSelect(t)}>
-              <div className="template-icon">{t.icon}</div>
-              <div className="template-name">{t.name}</div>
-            </div>
-          ))}
-          <div className="card template-card" style={{ borderStyle: 'dashed' }} onClick={() => onSelect(null)}>
-            <div className="template-icon">📋</div>
-            <div className="template-name" style={{ color: '#6b7280' }}>空白记录</div>
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div onClick={() => setOpen(!open)} style={{
+        padding: '10px 14px', borderRadius: 8, cursor: 'pointer',
+        background: 'rgba(255,255,255,0.03)', border: '1px solid ' + (open ? 'rgba(125,211,252,0.35)' : 'rgba(125,211,252,0.12)'),
+        color: value ? '#f1f5f9' : '#4a5568', fontSize: 13,
+        display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+        transition: 'all 0.25s', boxShadow: open ? '0 0 0 3px rgba(125,211,252,0.06)' : 'none',
+      }}>
+        <span>{displayVal}</span>
+        <span style={{ fontSize: 14 }}>📅</span>
+      </div>
+      {open && (
+        <div style={{
+          position: 'absolute', top: '100%', left: 0, marginTop: 4, zIndex: 100,
+          background: '#1a1f2e', border: '1px solid rgba(125,211,252,0.15)', borderRadius: 10,
+          boxShadow: '0 12px 32px rgba(0,0,0,0.5)', padding: 12, width: 260,
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ cursor: 'pointer', color: '#718096', fontSize: 16, padding: '0 6px' }} onClick={prev}>‹</span>
+            <span style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>{vY}年{vM + 1}月</span>
+            <span style={{ cursor: 'pointer', color: '#718096', fontSize: 16, padding: '0 6px' }} onClick={next}>›</span>
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', marginBottom: 4 }}>
+            {['日','一','二','三','四','五','六'].map(w => <div key={w} style={{ textAlign: 'center', fontSize: 10, color: '#4a5568', fontWeight: 600, padding: 2 }}>{w}</div>)}
+          </div>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(7,1fr)', gap: 2 }}>
+            {Array.from({ length: first }, (_, i) => <div key={'b' + i} />)}
+            {Array.from({ length: daysIn }, (_, i) => {
+              const d = i + 1;
+              const str = vY + '-' + pad(vM + 1) + '-' + pad(d);
+              const isSel = str === value;
+              const isTd = str === todayStr;
+              return (
+                <div key={d} onClick={() => pick(d)} style={{
+                  textAlign: 'center', padding: '5px 0', borderRadius: 6, fontSize: 12, cursor: 'pointer',
+                  color: isSel ? '#fff' : isTd ? '#7dd3fc' : '#a0aec0',
+                  background: isSel ? 'rgba(125,211,252,0.3)' : isTd ? 'rgba(125,211,252,0.08)' : 'transparent',
+                  fontWeight: isSel || isTd ? 700 : 400, transition: 'all 0.15s',
+                }}
+                onMouseEnter={e => { if (!isSel) e.currentTarget.style.background = 'rgba(125,211,252,0.06)'; }}
+                onMouseLeave={e => { if (!isSel) e.currentTarget.style.background = isTd ? 'rgba(125,211,252,0.08)' : 'transparent'; }}
+                >{d}</div>
+              );
+            })}
           </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
 
 function NewExperimentModal({ template, onClose, defaultProjectId }: { template: any; onClose: () => void; defaultProjectId?: string }) {
   const { addExperiment, projects } = useStore();
-  const fields = template?.fields || {};
-  const [form, setForm] = useState({ projectId: defaultProjectId || projects[0]?.id || '', title: '', type: fields.type || '', date: new Date().toISOString().slice(0,10), purpose: '', materials: fields.materials || '', steps: fields.steps || '', parameters: '', results: '', conclusion: '', issues: '', nextSteps: '', status: '待处理' as const, contentFormat: 'plaintext' as const });
-  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
-  const submit = () => { if (!form.title || !form.projectId) return; addExperiment(form as any); onClose(); };
-  return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal lg" onClick={e => e.stopPropagation()}>
-        <div className="modal-header"><h2>{template ? `新建${template.name}记录` : '新建实验记录'}</h2><X size={18} style={{ cursor: 'pointer', color: '#9ca3af' }} onClick={onClose} /></div>
-        <div className="modal-body">
-          <div className="grid-2">
-            <div className="form-group"><label>实验标题 *</label><input className="form-input" value={form.title} onChange={e => set('title', e.target.value)} /></div>
-            <div className="form-group"><label>所属项目 *</label><select className="form-select" value={form.projectId} onChange={e => set('projectId', e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-          </div>
-          <div className="grid-3">
-            <div className="form-group"><label>实验类型</label><input className="form-input" value={form.type} onChange={e => set('type', e.target.value)} /></div>
-            <div className="form-group"><label>日期</label><input type="date" className="form-input" value={form.date} onChange={e => set('date', e.target.value)} /></div>
-            <div className="form-group"><label>状态</label><select className="form-select" value={form.status} onChange={e => set('status', e.target.value)}><option>待处理</option><option>进行中</option><option>成功</option><option>失败</option><option>待复验</option></select></div>
-          </div>
-          <div className="form-group"><label>实验目的</label><textarea className="form-textarea" value={form.purpose} onChange={e => set('purpose', e.target.value)} /></div>
-          <div className="form-group"><label>样本/材料</label><textarea className="form-textarea" value={form.materials} onChange={e => set('materials', e.target.value)} /></div>
-          <div className="form-group"><label>实验步骤</label><textarea className="form-textarea" style={{ minHeight: 120 }} value={form.steps} onChange={e => set('steps', e.target.value)} /></div>
-          <div className="form-group"><label>关键参数</label><textarea className="form-textarea" value={form.parameters} onChange={e => set('parameters', e.target.value)} /></div>
-          <div className="form-group"><label>实验结果</label><textarea className="form-textarea" value={form.results} onChange={e => set('results', e.target.value)} /></div>
-          <div className="form-group"><label>初步结论</label><textarea className="form-textarea" value={form.conclusion} onChange={e => set('conclusion', e.target.value)} /></div>
-          <div className="form-group"><label>问题与异常</label><textarea className="form-textarea" value={form.issues} onChange={e => set('issues', e.target.value)} /></div>
-          <div className="form-group"><label>下一步计划</label><textarea className="form-textarea" value={form.nextSteps} onChange={e => set('nextSteps', e.target.value)} /></div>
-        </div>
-        <div className="modal-footer"><button className="btn" onClick={onClose}>取消</button><button className="btn primary" onClick={submit}>保存记录</button></div>
+  const fd = template?.fields || {};
+  const [f, sf] = useState({ projectId: defaultProjectId || projects[0]?.id || '', title: '', type: fd.type || '', date: localStorage.getItem('biolab-new-exp-date') || new Date().toISOString().slice(0,10), purpose: '', materials: fd.materials || '', steps: fd.steps || '', parameters: '', results: '', conclusion: '', issues: '', nextSteps: '', status: '待处理', contentFormat: 'plaintext' });
+  const s = (k: string, v: string) => sf(p => ({ ...p, [k]: v }));
+  const [duration, setDuration] = useState(1);
+  const [milestones, setMilestones] = useState<{day: number; label: string}[]>([]);
+  const [newDay, setNewDay] = useState('');
+  const [newLabel, setNewLabel] = useState('');
+
+  const addMs = () => {
+    const d = parseInt(newDay);
+    if (!d || d < 1 || d > duration || !newLabel.trim()) return;
+    setMilestones(prev => [...prev, { day: d, label: newLabel.trim() }].sort((a, b) => a.day - b.day));
+    setNewDay(''); setNewLabel('');
+  };
+
+  const removeMs = (idx: number) => setMilestones(prev => prev.filter((_, i) => i !== idx));
+
+  const doSave = async () => {
+    if (!f.title) { showAlert('请填写标题'); return; }
+    let pid = f.projectId;
+    if (!pid) {
+      const name = await showPrompt('还没有课题，请输入课题名称：');
+      if (!name) return;
+      const store = useStore.getState();
+      await store.addProject({ name, code: '', direction: '', description: '', leader: '', startDate: new Date().toISOString().slice(0,10), status: '进行中', tags: '[]', budget: 0 } as any);
+      await store.loadAll();
+      const newProjects = useStore.getState().projects;
+      pid = newProjects[newProjects.length - 1]?.id;
+      if (!pid) { showAlert('创建课题失败'); return; }
+      s('projectId', pid);
+    }
+    const params = JSON.stringify({ duration_days: duration, milestones });
+    addExperiment({ ...f, projectId: pid, parameters: params } as any);
+    localStorage.removeItem('biolab-new-exp-date');
+    onClose();
+  };
+
+  return (<div className="overlay" onClick={onClose}><div className="modal lg" onClick={e => e.stopPropagation()}>
+    <div className="modal-header"><h2>{template ? '新建' + template.name : '新建实验'}</h2><X size={16} style={{ cursor: 'pointer', color: '#576178' }} onClick={onClose} /></div>
+    <div className="modal-body">
+      <div className="grid-2">
+        <div className="form-group"><label>标题 *</label><input className="form-input" value={f.title} onChange={e => s('title', e.target.value)} autoFocus /></div>
+        <div className="form-group"><label>所属课题 *</label><DarkSelect value={f.projectId} onChange={async (v) => {
+                  if (v === '__new__') {
+                    const name = await showPrompt('输入课题名称：');
+                    if (!name) return;
+                    const store = useStore.getState();
+                    await store.addProject({ name, code: '', direction: '', description: '', leader: '', startDate: new Date().toISOString().slice(0,10), status: '进行中', tags: '[]', budget: 0 } as any);
+                    await store.loadAll();
+                    const np = useStore.getState().projects;
+                    const newest = np[np.length - 1];
+                    if (newest) s('projectId', newest.id);
+                  } else { s('projectId', v); }
+                }} options={[...projects.map(p => ({ value: p.id, label: p.name })), { value: '__new__', label: '+ 新建课题' }]} placeholder="请选择课题" /></div>
       </div>
+
+      <div className="form-group" style={{marginBottom:14}}>
+        <label>实验日期</label>
+        <DarkDatePicker value={f.date} onChange={v => s('date', v)} />
+      </div>
+
+      {/* Timeline setup */}
+      <div style={{ background: 'rgba(125,211,252,0.04)', border: '1px solid rgba(125,211,252,0.1)', borderRadius: 8, padding: 14, marginBottom: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: '#90cdf4' }}>实验周期</span>
+          <input style={{ width: 60, textAlign: 'center', background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '4px 6px', color: '#f1f5f9', fontSize: 13, outline: 'none' }} value={duration} onChange={e => setDuration(parseInt(e.target.value) || 1)} />
+          <span style={{ fontSize: 12, color: '#718096' }}>天</span>
+        </div>
+
+        {milestones.length > 0 && (
+          <div style={{ marginBottom: 10 }}>
+            {milestones.map((ms, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
+                <span style={{ fontSize: 12, color: '#7dd3fc', fontWeight: 600, width: 40 }}>第{ms.day}天</span>
+                <span style={{ fontSize: 12, color: '#a0aec0', flex: 1 }}>{ms.label}</span>
+                <span style={{ cursor: 'pointer', color: '#4a5568', fontSize: 14 }} onClick={() => removeMs(i)}>✕</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <span style={{ fontSize: 11, color: '#718096' }}>第</span>
+          <input style={{ width: 40, textAlign: 'center', background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '4px', color: '#f1f5f9', fontSize: 12, outline: 'none' }} value={newDay} onChange={e => setNewDay(e.target.value.replace(/\D/g, ''))} placeholder="天" />
+          <input style={{ flex: 1, background: 'var(--bg-deep)', border: '1px solid var(--border-subtle)', borderRadius: 4, padding: '4px 8px', color: '#f1f5f9', fontSize: 12, outline: 'none' }} value={newLabel} onChange={e => setNewLabel(e.target.value)} placeholder="节点名称" onKeyDown={e => e.key === 'Enter' && addMs()} />
+          <span style={{ cursor: 'pointer', color: '#7dd3fc', fontSize: 13, fontWeight: 600, padding: '4px 8px' }} onClick={addMs}>添加</span>
+        </div>
+      </div>
+
+      <div className="form-group"><label>目的</label><textarea className="form-textarea" value={f.purpose} onChange={e => s('purpose', e.target.value)} /></div>
+      <div className="form-group"><label>材料</label><textarea className="form-textarea" value={f.materials} onChange={e => s('materials', e.target.value)} /></div>
+      <div className="form-group"><label>步骤</label><textarea className="form-textarea" style={{ minHeight: 100 }} value={f.steps} onChange={e => s('steps', e.target.value)} /></div>
+      <div className="form-group"><label>结果</label><textarea className="form-textarea" value={f.results} onChange={e => s('results', e.target.value)} /></div>
+      <div className="form-group"><label>结论</label><textarea className="form-textarea" value={f.conclusion} onChange={e => s('conclusion', e.target.value)} /></div>
+    </div>
+    <div className="modal-footer"><button className="btn" onClick={onClose}>取消</button><button className="btn primary" onClick={doSave}>保存</button></div>
+  </div></div>);
+}
+
+function NewReferenceModal({ onClose }: { onClose: () => void }) {
+  const { addReference, projects, experiments } = useStore();
+  const [file, setFile] = useState<{name: string; path: string} | null>(null);
+  const [tags, setTags] = useState('');
+  const [tagInput, setTagInput] = useState('');
+  const [linkType, setLinkType] = useState('');
+  const [linkId, setLinkId] = useState('');
+  const [title, setTitle] = useState('');
+  const [notes, setNotes] = useState('');
+
+  const pickFile = async () => {
+    try {
+      const { open } = await import('@tauri-apps/plugin-dialog');
+      const sel = await open({ multiple: false, filters: [{ name: 'PDF', extensions: ['pdf'] }] });
+      if (sel) {
+        const path = Array.isArray(sel) ? sel[0] : sel;
+        const name = path.split('/').pop() || path.split('\\').pop() || 'document.pdf';
+        setFile({ name, path });
+        if (!title) setTitle(name.replace('.pdf', ''));
+      }
+    } catch (e) { console.error(e); }
+  };
+
+  const addTag = () => {
+    if (!tagInput.trim()) return;
+    const t = tags ? tags + ',' + tagInput.trim() : tagInput.trim();
+    setTags(t);
+    setTagInput('');
+  };
+
+  const removeTag = (tag: string) => {
+    setTags(tags.split(',').filter(t => t !== tag).join(','));
+  };
+
+  const doSave = async () => {
+    if (!title) { await showAlert('请输入标题'); return; }
+    let pid = linkType === 'project' ? linkId : (projects[0]?.id || '');
+    if (!pid) {
+      // Auto create a default project
+      const store = useStore.getState();
+      await store.addProject({ name: '默认课题', code: '', direction: '', description: '', leader: '', startDate: new Date().toISOString().slice(0,10), status: '进行中', tags: '[]', budget: 0 } as any);
+      await store.loadAll();
+      const np = useStore.getState().projects;
+      pid = np[np.length - 1]?.id || '';
+    }
+    try {
+      await addReference({
+        title,
+        doi: file?.path || '',
+        authors: tags,
+        year: new Date().getFullYear(),
+        journal: linkType && linkId ? linkType + ':' + linkId : '',
+        coreConclusion: notes,
+        relation: '',
+        notes: '',
+        projectId: pid,
+      } as any);
+      onClose();
+    } catch (e: any) {
+      await showAlert('保存失败: ' + e);
+    }
+  };
+
+  const tagList = tags ? tags.split(',').filter(Boolean) : [];
+
+  return (<div className="overlay" onClick={onClose}><div className="modal lg" onClick={e => e.stopPropagation()}>
+    <div className="modal-header"><h2>添加文献</h2><X size={16} style={{ cursor: 'pointer', color: '#576178' }} onClick={onClose} /></div>
+    <div className="modal-body">
+      {/* PDF Upload */}
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ fontSize: 12, fontWeight: 600, color: '#90cdf4', display: 'block', marginBottom: 6 }}>PDF 文件</label>
+        <div onClick={pickFile} style={{
+          border: '1px dashed rgba(125,211,252,0.2)', borderRadius: 8, padding: 20,
+          textAlign: 'center', cursor: 'pointer', background: 'rgba(125,211,252,0.02)',
+          transition: 'all 0.3s',
+        }}>
+          {file ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
+              <span style={{ fontSize: 20 }}>📄</span>
+              <span style={{ color: '#f1f5f9', fontSize: 13 }}>{file.name}</span>
+              <span style={{ color: '#48bb78', fontSize: 11 }}>✓</span>
+            </div>
+          ) : (
+            <div style={{ color: '#718096', fontSize: 13 }}>点击选择 PDF 文件</div>
+          )}
+        </div>
+      </div>
+
+      {/* Title */}
+      <div className="form-group">
+        <label>标题</label>
+        <input className="form-input" value={title} onChange={e => setTitle(e.target.value)} placeholder="文献标题" />
+      </div>
+
+      {/* Tags + Link row */}
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'flex-start' }}>
+        <div style={{ flex: 2 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: '#90cdf4', display: 'block', marginBottom: 6 }}>标签</label>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: tagList.length > 0 ? 6 : 0 }}>
+            {tagList.map(t => (
+              <span key={t} style={{ background: 'rgba(125,211,252,0.1)', border: '1px solid rgba(125,211,252,0.2)', borderRadius: 12, padding: '2px 8px', fontSize: 10, color: '#7dd3fc', display: 'flex', alignItems: 'center', gap: 3 }}>
+                {t}<span style={{ cursor: 'pointer', opacity: 0.6 }} onClick={() => removeTag(t)}>✕</span>
+              </span>
+            ))}
+          </div>
+          <input className="form-input" value={tagInput} onChange={e => setTagInput(e.target.value)} placeholder="输入标签后回车" onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addTag(); } }} style={{ width: '100%' }} />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: '#90cdf4', display: 'block', marginBottom: 6 }}>课题</label>
+          <DarkSelect value={linkType === 'project' ? linkId : ''} onChange={v => { setLinkType('project'); setLinkId(v); }} options={projects.map(p => ({ value: p.id, label: p.name }))} placeholder="选择课题" />
+        </div>
+        <div style={{ flex: 1 }}>
+          <label style={{ fontSize: 12, fontWeight: 600, color: '#90cdf4', display: 'block', marginBottom: 6 }}>实验</label>
+          <DarkSelect value={linkType === 'experiment' ? linkId : ''} onChange={v => { setLinkType('experiment'); setLinkId(v); }} options={experiments.map(e => ({ value: e.id, label: e.title }))} placeholder="选择实验" />
+        </div>
+      </div>
+
+      {/* Notes */}
+      <div className="form-group">
+        <label>备注</label>
+        <textarea className="form-textarea" value={notes} onChange={e => setNotes(e.target.value)} placeholder="阅读笔记、摘要..." />
+      </div>
+    </div>
+    <div className="modal-footer">
+      <button className="btn" onClick={onClose}>取消</button>
+      <button className="btn primary" onClick={doSave}>保存</button>
+    </div>
+  </div></div>);
+}
+
+function ClockWidget() {
+  const [now, setNow] = useState(new Date());
+  const [style, setStyle] = useState(() => parseInt(localStorage.getItem('biolab-clock-style') || '0'));
+  const [tz, setTz] = useState(() => localStorage.getItem('biolab-clock-tz') || Intl.DateTimeFormat().resolvedOptions().timeZone);
+  const [showTz, setShowTz] = useState(false);
+  const [search, setSearch] = useState('');
+
+  useEffect(() => { const t = setInterval(() => setNow(new Date()), 1000); return () => clearInterval(t); }, []);
+
+  const tzNow = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+  const hh = tzNow.getHours(), mi = tzNow.getMinutes(), ss = tzNow.getSeconds();
+  const pad = (n: number) => String(n).padStart(2, '0');
+
+  const allZones = [
+    { id: 'Asia/Shanghai', label: '北京', flag: '🇨🇳' },
+    { id: 'Asia/Tokyo', label: '东京', flag: '🇯🇵' },
+    { id: 'Asia/Seoul', label: '首尔', flag: '🇰🇷' },
+    { id: 'Asia/Singapore', label: '新加坡', flag: '🇸🇬' },
+    { id: 'Asia/Dubai', label: '迪拜', flag: '🇦🇪' },
+    { id: 'Asia/Kolkata', label: '孟买', flag: '🇮🇳' },
+    { id: 'Europe/London', label: '伦敦', flag: '🇬🇧' },
+    { id: 'Europe/Paris', label: '巴黎', flag: '🇫🇷' },
+    { id: 'Europe/Berlin', label: '柏林', flag: '🇩🇪' },
+    { id: 'Europe/Moscow', label: '莫斯科', flag: '🇷🇺' },
+    { id: 'America/New_York', label: '纽约', flag: '🇺🇸' },
+    { id: 'America/Chicago', label: '芝加哥', flag: '🇺🇸' },
+    { id: 'America/Los_Angeles', label: '洛杉矶', flag: '🇺🇸' },
+    { id: 'America/Toronto', label: '多伦多', flag: '🇨🇦' },
+    { id: 'America/Sao_Paulo', label: '圣保罗', flag: '🇧🇷' },
+    { id: 'Pacific/Auckland', label: '奥克兰', flag: '🇳🇿' },
+    { id: 'Australia/Sydney', label: '悉尼', flag: '🇦🇺' },
+    { id: 'Africa/Cairo', label: '开罗', flag: '🇪🇬' },
+    { id: 'Pacific/Honolulu', label: '夏威夷', flag: '🇺🇸' },
+  ];
+
+  const filtered = search ? allZones.filter(z => z.label.includes(search) || z.id.toLowerCase().includes(search.toLowerCase())) : allZones;
+  const currentZone = allZones.find(z => z.id === tz);
+  const tzLabel = currentZone ? currentZone.label : tz.split('/').pop();
+
+  const selectTz = (id: string) => { setTz(id); localStorage.setItem('biolab-clock-tz', id); setShowTz(false); setSearch(''); };
+  const switchStyle = () => { const next = (style + 1) % 2; setStyle(next); localStorage.setItem('biolab-clock-style', String(next)); };
+
+  const Digital = () => (<div style={{display:'flex',alignItems:'baseline'}}><span className="ck-num">{pad(hh)}</span><span className="ck-sep">:</span><span className="ck-num">{pad(mi)}</span><span className="ck-sep ck-blink">:</span><span className="ck-num" style={{fontSize:18,color:'#4a5568'}}>{pad(ss)}</span></div>);
+
+  const AnalogClock = () => {
+    const r = 66, hA = ((hh%12)+mi/60)*30-90, mA = mi*6-90, sA = ss*6-90;
+    const ln = (a: number, len: number, w: number, col: string) => { const rd = a*Math.PI/180; return <line x1={r} y1={r} x2={r+Math.cos(rd)*len} y2={r+Math.sin(rd)*len} stroke={col} strokeWidth={w} strokeLinecap="round" />; };
+    return (<svg width={r*2} height={r*2}>
+      <circle cx={r} cy={r} r={r-2} fill="none" stroke="rgba(125,211,252,0.15)" strokeWidth="1.5" />
+      {[1,2,3,4,5,6,7,8,9,10,11,12].map(i => { const a=(i*30-90)*Math.PI/180; const tx=r+Math.cos(a)*(r-14); const ty=r+Math.sin(a)*(r-14); return <text key={i} x={tx} y={ty} textAnchor="middle" dominantBaseline="central" fill={i%3===0?'#7dd3fc':'rgba(125,211,252,0.4)'} fontSize={i%3===0?'12':'9'} fontWeight={i%3===0?'600':'400'} fontFamily="'DIN Alternate',system-ui">{i}</text>; })}
+      {[0,1,2,3,4,5,6,7,8,9,10,11].map(i => { const a=i*30*Math.PI/180; return <line key={'t'+i} x1={r+Math.sin(a)*(r-4)} y1={r-Math.cos(a)*(r-4)} x2={r+Math.sin(a)*(r-2)} y2={r-Math.cos(a)*(r-2)} stroke="rgba(125,211,252,0.15)" strokeWidth={i%3===0?1.5:0.5} />; })}
+      {ln(hA,r*0.45,3,'#7dd3fc')}{ln(mA,r*0.6,2,'#a0aec0')}{ln(sA,r*0.72,0.8,'#fc8181')}
+      <circle cx={r} cy={r} r="3" fill="#7dd3fc" />
+    </svg>);
+  };
+
+  
+
+  const renders = [Digital, AnalogClock];
+  const View = renders[style];
+
+  return (
+    <div className="ck-box">
+      <div style={{fontSize:10,color:'#718096',cursor:'pointer',marginBottom:4,transition:'color 0.2s'}} onClick={()=>{setShowTz(!showTz);setSearch('');}} onMouseEnter={e=>e.currentTarget.style.color='#7dd3fc'} onMouseLeave={e=>e.currentTarget.style.color='#718096'}>{tzLabel}</div>
+      <div style={{cursor:'pointer',display:'flex',justifyContent:'center',padding:'4px 0'}} onClick={switchStyle}><View /></div>
+      <div style={{display:'flex',justifyContent:'flex-end',marginTop:6}}>
+        <div style={{display:'flex',gap:4}}>{[0,1].map(i => <div key={i} style={{width:5,height:5,borderRadius:'50%',background:i===style?'#7dd3fc':'rgba(255,255,255,0.1)',boxShadow:i===style?'0 0 6px rgba(125,211,252,0.4)':'none',transition:'all 0.3s'}} />)}</div>
+      </div>
+      {showTz && (<><div style={{position:'fixed',inset:0,zIndex:49}} onClick={()=>{setShowTz(false);setSearch('');}} /><div style={{position:'absolute',top:'100%',left:0,right:0,marginTop:4,background:'rgba(20,24,34,0.98)',border:'1px solid rgba(125,211,252,0.15)',borderRadius:8,padding:8,zIndex:50,boxShadow:'0 12px 32px rgba(0,0,0,0.5)'}} onClick={e=>e.stopPropagation()}>
+        <input style={{width:'100%',padding:'6px 8px',border:'1px solid rgba(125,211,252,0.1)',borderRadius:6,background:'rgba(255,255,255,0.03)',color:'#f1f5f9',fontSize:12,outline:'none',marginBottom:6,fontFamily:'inherit',boxSizing:'border-box'}} value={search} onChange={e=>setSearch(e.target.value)} placeholder="搜索城市..." autoFocus />
+        <div style={{maxHeight:200,overflowY:'auto'}}>{filtered.map(z => (<div key={z.id} onClick={()=>selectTz(z.id)} style={{display:'flex',justifyContent:'space-between',padding:'6px 8px',borderRadius:4,cursor:'pointer',fontSize:12,color:z.id===tz?'#7dd3fc':'#a0aec0',background:z.id===tz?'rgba(125,211,252,0.08)':'transparent',transition:'all 0.15s'}} onMouseEnter={e=>(e.currentTarget.style.background='rgba(125,211,252,0.06)')} onMouseLeave={e=>(e.currentTarget.style.background=z.id===tz?'rgba(125,211,252,0.08)':'transparent')}><span>{z.label}</span><span style={{fontSize:10,color:'#4a5568'}}>{z.id.split('/').pop()}</span></div>))}</div>
+      </div></>)}
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// New Task Modal
-// ═══════════════════════════════════════
-function NewTaskModal({ onClose, defaultProjectId }: { onClose: () => void; defaultProjectId?: string }) {
-  const { addTask, projects } = useStore();
-  const [form, setForm] = useState({ name: '', projectId: defaultProjectId || projects[0]?.id || '', dueDate: '', priority: '中' as const, status: '待处理' as const, assignee: '', notes: '' });
-  const set = (k: string, v: string) => setForm(f => ({ ...f, [k]: v }));
+
+// ═══ Calendar Widget ═══
+function CalendarWidget({ experiments, onNewExp }: { experiments: any[]; onNewExp: () => void }) {
+  const [yr, setYr] = useState(new Date().getFullYear());
+  const [mo, setMo] = useState(new Date().getMonth());
+  const [sel, setSel] = useState<number | null>(null);
+
+  const now = new Date();
+  const days = new Date(yr, mo + 1, 0).getDate();
+  const start = new Date(yr, mo, 1).getDay();
+
+  // Map: day number -> experiment info
+  const dayMap: Record<number, string[]> = {};
+  experiments.forEach((ex: any) => {
+    // Show experiment on its start date
+    const d = new Date(ex.date);
+    if (d.getFullYear() === yr && d.getMonth() === mo) {
+      const dd = d.getDate();
+      if (!dayMap[dd]) dayMap[dd] = [];
+      dayMap[dd].push(ex.title);
+    }
+    // Show milestones
+    let tl: any = { milestones: [] };
+    try { if (ex.parameters) tl = JSON.parse(ex.parameters); } catch {}
+    (tl.milestones || []).forEach((ml: any) => {
+      const md = new Date(ex.date);
+      md.setDate(md.getDate() + ml.day);
+      if (md.getFullYear() === yr && md.getMonth() === mo) {
+        const dd = md.getDate();
+        if (!dayMap[dd]) dayMap[dd] = [];
+        dayMap[dd].push(ex.title + ' - ' + ml.label);
+      }
+    });
+  });
+
+  const isToday = (d: number) => now.getFullYear() === yr && now.getMonth() === mo && now.getDate() === d;
+  const goPrev = () => { setSel(null); mo === 0 ? (setYr(yr-1), setMo(11)) : setMo(mo-1); };
+  const goNext = () => { setSel(null); mo === 11 ? (setYr(yr+1), setMo(0)) : setMo(mo+1); };
+
+  const selItems = sel ? (dayMap[sel] || []) : [];
+
   return (
-    <div className="overlay" onClick={onClose}>
-      <div className="modal sm" onClick={e => e.stopPropagation()}>
-        <div className="modal-header"><h2>新建任务</h2><X size={18} style={{ cursor: 'pointer', color: '#9ca3af' }} onClick={onClose} /></div>
-        <div className="modal-body">
-          <div className="form-group"><label>任务名称 *</label><input className="form-input" value={form.name} onChange={e => set('name', e.target.value)} /></div>
-          <div className="form-group"><label>所属项目</label><select className="form-select" value={form.projectId} onChange={e => set('projectId', e.target.value)}>{projects.map(p => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-          <div className="grid-3">
-            <div className="form-group"><label>截止日期</label><input type="date" className="form-input" value={form.dueDate} onChange={e => set('dueDate', e.target.value)} /></div>
-            <div className="form-group"><label>优先级</label><select className="form-select" value={form.priority} onChange={e => set('priority', e.target.value)}><option>高</option><option>中</option><option>低</option></select></div>
-            <div className="form-group"><label>负责人</label><input className="form-input" value={form.assignee} onChange={e => set('assignee', e.target.value)} /></div>
-          </div>
-        </div>
-        <div className="modal-footer"><button className="btn" onClick={onClose}>取消</button><button className="btn primary" onClick={() => { if (form.name) { addTask(form as any); onClose(); } }}>创建</button></div>
+    <div className="cw">
+      <div className="cw-head">
+        <span className="cw-nav" onClick={goPrev}>‹</span>
+        <span className="cw-title">{yr}年{mo+1}月</span>
+        <span className="cw-nav" onClick={goNext}>›</span>
       </div>
+      <div className="cw-week">
+        {['日','一','二','三','四','五','六'].map(w => <div key={w} className="cw-wd">{w}</div>)}
+      </div>
+      <div className="cw-body">
+        {Array.from({length: start}, (_, i) => <div key={'b'+i} className="cw-day empty" />)}
+        {Array.from({length: days}, (_, i) => {
+          const d = i + 1;
+          const has = !!dayMap[d];
+          const active = sel === d;
+          return (
+            <div key={d}
+              className={'cw-day' + (isToday(d) ? ' today' : '') + (has ? ' has' : '') + (active ? ' active' : '')}
+              onClick={() => setSel(active ? null : d)}
+            >
+              {d}
+              {has && <span className="cw-dot" />}
+            </div>
+          );
+        })}
+      </div>
+      {sel && selItems.length > 0 && (
+        <div className="cw-popup">
+          <div className="cw-popup-title">{mo+1}月{sel}日</div>
+          {selItems.map((item, i) => <div key={i} className="cw-popup-item">{item}</div>)}
+          {(() => { const selDate = new Date(yr, mo, sel); const todayMid = new Date(); todayMid.setHours(0,0,0,0); return selDate >= todayMid; })() && <div className="cw-popup-add" onClick={(e) => { e.stopPropagation(); const dateStr = yr + '-' + String(mo+1).padStart(2,'0') + '-' + String(sel).padStart(2,'0'); localStorage.setItem('biolab-new-exp-date', dateStr); setSel(null); onNewExp(); }}>+ 新建实验</div>}
+        </div>
+      )}
+      {sel && selItems.length === 0 && (
+        <div className="cw-popup">
+          <div className="cw-popup-title">{mo+1}月{sel}日</div>
+          <div className="cw-popup-empty">当天无实验</div>
+          {(() => { const selDate = new Date(yr, mo, sel); const todayMid = new Date(); todayMid.setHours(0,0,0,0); return selDate >= todayMid; })() && <div className="cw-popup-add" onClick={(e) => { e.stopPropagation(); const dateStr = yr + '-' + String(mo+1).padStart(2,'0') + '-' + String(sel).padStart(2,'0'); localStorage.setItem('biolab-new-exp-date', dateStr); setSel(null); onNewExp(); }}>+ 新建实验</div>}
+        </div>
+      )}
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// Dashboard
-// ═══════════════════════════════════════
-function Dashboard() {
-  const { projects, experiments, tasks, files, results, navigateTo } = useStore();
-  const activeProjects = projects.filter(p => p.status === '进行中').length;
-  const pendingTasks = tasks.filter(t => t.status !== '已完成').length;
+
+// ═══ Timer ═══
+function TimerWidget() {
+  const [total, setTotal] = useState(0);
+  const [left, setLeft] = useState(0);
+  const [on, setOn] = useState(false);
+  const iv = useRef<any>(null);
+  const [h, setH] = useState(0);
+  const [m, setM] = useState(5);
+  const [s, setS] = useState(0);
+  const [editing, setEditing] = useState<number | null>(null);
+  const [editBuf, setEditBuf] = useState('');
+
+  useEffect(() => {
+    if (on && left > 0) {
+      iv.current = setInterval(() => setLeft(l => l <= 1 ? (setOn(false), 0) : l - 1), 1000);
+    } else clearInterval(iv.current);
+    return () => clearInterval(iv.current);
+  }, [on]);
+
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const hh = Math.floor(left / 3600), mm = Math.floor((left % 3600) / 60), ss = left % 60;
+
+  const go = () => {
+    const t = h * 3600 + m * 60 + s;
+    if (t > 0) { setTotal(t); setLeft(t); setOn(true); }
+  };
+
+  const startEdit = (idx: number) => {
+    setEditing(idx);
+    setEditBuf('');
+  };
+
+  const commitEdit = (idx: number) => {
+    const val = parseInt(editBuf) || 0;
+    const mx = idx === 0 ? 23 : 59;
+    const clamped = Math.min(mx, Math.max(0, val));
+    if (idx === 0) setH(clamped);
+    else if (idx === 1) setM(clamped);
+    else setS(clamped);
+    setEditing(null);
+    setEditBuf('');
+  };
+
+  const handleKey = (e: React.KeyboardEvent, idx: number) => {
+    if (e.key === 'Enter') { commitEdit(idx); if (idx < 2) startEdit(idx + 1); else go(); }
+    else if (e.key === 'Escape') { setEditing(null); setEditBuf(''); }
+    else if (e.key === 'Tab') { e.preventDefault(); commitEdit(idx); if (idx < 2) startEdit(idx + 1); }
+  };
+
+  if (total > 0) return (
+    <div className="tw">
+      <div className="tw-row">
+        <span className="tw-d">{pad(hh)}</span><span className="tw-co">:</span>
+        <span className="tw-d">{pad(mm)}</span><span className="tw-co">:</span>
+        <span className="tw-d">{pad(ss)}</span>
+      </div>
+      <div className="tw-bar"><div className="tw-fill" style={{ width: ((total - left) / total * 100) + '%' }} /></div>
+      <div className="tw-acts">
+        <span className="tw-ab" onClick={() => setOn(!on)}>{on ? '暂停' : '继续'}</span>
+        <span className="tw-ab tw-ar" onClick={() => { setOn(false); setTotal(0); setLeft(0); }}>重置</span>
+      </div>
+    </div>
+  );
+
+  const vals = [h, m, s];
+  const labels = ['时', '分', '秒'];
 
   return (
-    <div>
-      <div className="page-header"><h1>工作台</h1><p>欢迎回来，这是你的科研工作概览</p></div>
-      <div className="grid-4 mb-4">
-        <div className="stat-card"><div className="flex justify-between items-center mb-2"><FolderOpen size={18} color="#2563eb" style={{ opacity: 0.7 }} /><span className="stat-value" style={{ color: '#2563eb' }}>{activeProjects}</span></div><span className="stat-label">进行中项目</span></div>
-        <div className="stat-card"><div className="flex justify-between items-center mb-2"><FlaskConical size={18} color="#059669" style={{ opacity: 0.7 }} /><span className="stat-value" style={{ color: '#059669' }}>{experiments.length}</span></div><span className="stat-label">实验记录</span></div>
-        <div className="stat-card"><div className="flex justify-between items-center mb-2"><CheckSquare size={18} color="#d97706" style={{ opacity: 0.7 }} /><span className="stat-value" style={{ color: '#d97706' }}>{pendingTasks}</span></div><span className="stat-label">待办任务</span></div>
-        <div className="stat-card"><div className="flex justify-between items-center mb-2"><FileText size={18} color="#8b5cf6" style={{ opacity: 0.7 }} /><span className="stat-value" style={{ color: '#8b5cf6' }}>{files.length}</span></div><span className="stat-label">文件附件</span></div>
-      </div>
-      <div className="section-header"><span className="section-title">最近项目</span></div>
-      <div className="grid-3 mb-4">
-        {projects.slice(0, 3).map(p => (
-          <div key={p.id} className="card clickable" style={{ marginBottom: 0 }} onClick={() => navigateTo('projectDetail', { projectId: p.id })}>
-            <div className="flex justify-between items-center mb-2"><span className="font-bold">{p.name}</span><Badge>{p.status}</Badge></div>
-            <p className="text-sm muted mb-2">{p.description?.slice(0, 80)}...</p>
-            <div className="meta-row"><FlaskConical size={14} /> {experiments.filter(e => e.projectId === p.id).length} 实验 <FileText size={14} /> {results.filter(r => r.projectId === p.id).length} 结果</div>
-          </div>
+    <div className="tw">
+      <div className="tw-row">
+        {[0, 1, 2].map(i => (
+          <React.Fragment key={i}>
+            {i > 0 && <span className="tw-co">:</span>}
+            <div className="tw-cell">
+              {editing === i ? (
+                <input
+                  className="tw-input"
+                  value={editBuf}
+                  onChange={e => { const v = e.target.value.replace(/\D/g, ''); if (v.length <= 2) setEditBuf(v); }}
+                  onBlur={() => commitEdit(i)}
+                  onKeyDown={e => handleKey(e, i)}
+                  autoFocus
+                />
+              ) : (
+                <div className="tw-digit" onClick={() => startEdit(i)}>{pad(vals[i])}</div>
+              )}
+              <span className="tw-lbl">{labels[i]}</span>
+            </div>
+          </React.Fragment>
         ))}
       </div>
-      <div className="grid-2">
-        <div>
-          <div className="section-header"><span className="section-title">最近实验</span></div>
-          {experiments.slice(0, 4).map(e => (
-            <div key={e.id} className="card compact clickable" onClick={() => navigateTo('experimentDetail', { experimentId: e.id, projectId: e.projectId })}>
-              <div className="flex justify-between items-center"><span className="font-bold text-sm">{e.title}</span><Badge>{e.status}</Badge></div>
-              <div className="meta-row mt-2"><Calendar size={14} /> {e.date} · {e.type}</div>
-            </div>
-          ))}
-        </div>
-        <div>
-          <div className="section-header"><span className="section-title">待办任务</span></div>
-          {tasks.filter(t => t.status !== '已完成').slice(0, 5).map(t => {
-            const proj = projects.find(p => p.id === t.projectId);
-            return (
-              <div key={t.id} className="card compact flex items-center gap-3">
-                <input type="checkbox" checked={t.status === '已完成'} onChange={() => useStore.getState().updateTask(t.id, { status: t.status === '已完成' ? '待处理' : '已完成' })} />
-                <div className="flex-1"><div className="font-bold text-sm">{t.name}</div><div className="text-xs muted">{proj?.name} · {t.dueDate ? formatDate(t.dueDate) : '无截止日'}</div></div>
-                <Badge status={t.priority}>{t.priority}</Badge>
-              </div>
-            );
-          })}
-        </div>
-      </div>
+      <div className="tw-start" onClick={go}>开始</div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// Projects List
-// ═══════════════════════════════════════
-function ProjectsList({ onNewProject }: { onNewProject: () => void }) {
-  const { projects, experiments, results, navigateTo } = useStore();
+
+function HomePage({ onAction }: { onAction: (t: string) => void }) {
+  const { projects, experiments, results, tasks, references, files, navigateTo } = useStore();
+  const [dragId, setDragId] = useState<string|null>(null);
+  const [overId, setOverId] = useState<string|null>(null);
+  
+  // Get ordered experiments
+  // Today's date string YYYY-MM-DD
+  const todayStr = (() => { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0'); })();
+  
+  // Get today's experiments: started today OR has a milestone today
+  const getTodayExps = () => {
+    const todayD = new Date(todayStr + 'T00:00:00');
+    return experiments.filter((ex: any) => {
+      const startD = new Date(ex.date + 'T00:00:00');
+      if (startD > todayD) return false; // future experiment, not today
+      let tl: any = { duration_days: 30 };
+      try { if (ex.parameters) tl = JSON.parse(ex.parameters); } catch {}
+      const duration = tl.duration_days || 30;
+      const daysPassed = Math.floor((todayD.getTime() - startD.getTime()) / 86400000) + 1;
+      return daysPassed <= duration; // still within duration
+    }).slice(0, 8);
+  };
+  
+  const getOrdered = () => {
+    const all = getTodayExps();
+    const saved = localStorage.getItem('biolab-exp-order');
+    if (!saved) return all;
+    const ids = saved.split(',');
+    const ordered = ids.map((id: string) => all.find((e: any) => e.id === id)).filter(Boolean) as any[];
+    all.forEach((e: any) => { if (!ordered.find((o: any) => o.id === e.id)) ordered.push(e); });
+    return ordered;
+  };
+  const [recentExps, setRecentExps] = useState<any[]>([]);
+  useEffect(() => { setRecentExps(getOrdered()); }, [experiments]);
+  const pendingTasks = tasks.filter(t => t.status !== '已完成').slice(0, 3);
+
   return (
-    <div>
-      <div className="page-header flex justify-between items-center">
-        <div><h1>项目管理</h1><p>管理你的所有科研课题</p></div>
-        <button className="btn primary" onClick={onNewProject}><Plus size={16} /> 新建项目</button>
+    <div className="page-container">
+      
+
+
+
+      {/* Continue + Tasks */}
+      <div className="grid-2" style={{ gap: 16 }}>
+        <div>
+          <div className="sec-title" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>今日实验<span style={{cursor:"pointer",color:"#7dd3fc",fontSize:18,lineHeight:1}} onClick={() => { localStorage.removeItem('biolab-new-exp-date'); onAction("experiment"); }}>+</span></div>
+          {recentExps.length > 0 ? recentExps.map(e => {
+            const proj = projects.find(p => p.id === e.projectId);
+            const steps = ['purpose', 'materials', 'steps', 'results', 'conclusion']; let timeline: any = { duration_days: 30, milestones: [] }; try { if (e.parameters) timeline = JSON.parse(e.parameters); } catch {} if (!timeline.duration_days) timeline.duration_days = 30; const startD = new Date(e.date + 'T00:00:00'); const daysP = Math.max(1, Math.floor((new Date().setHours(0,0,0,0) - startD.getTime()) / 86400000) + 1); const sortedMilestones = (timeline.milestones || []).sort((a: any, b: any) => a.day - b.day); const nextMilestone = sortedMilestones.find((m: any) => m.day > daysP);
+            const filled = steps.filter(s => !!(e as any)[s]).length;
+            const pct = Math.min(100, Math.round((daysP / timeline.duration_days) * 100));
+            const statusColor = pct >= 100 ? '#48bb78' : pct >= 70 ? '#ed8936' : '#63b3ed';
+            return (
+              <div key={e.id} className={'exp-progress-card' + (overId === e.id ? ' drag-over' : '') + (dragId === e.id ? ' dragging' : '')}
+                draggable
+                onDragStart={(ev) => { setDragId(e.id); ev.dataTransfer.effectAllowed = 'move'; }}
+                onDragOver={(ev) => { ev.preventDefault(); ev.dataTransfer.dropEffect = 'move'; setOverId(e.id); }}
+                onDragLeave={() => setOverId(null)}
+                onDrop={(ev) => {
+                  ev.preventDefault();
+                  if (dragId && dragId !== e.id) {
+                    setRecentExps(prev => {
+                      const list = [...prev];
+                      const fromIdx = list.findIndex((x: any) => x.id === dragId);
+                      const toIdx = list.findIndex((x: any) => x.id === e.id);
+                      if (fromIdx >= 0 && toIdx >= 0) {
+                        const [item] = list.splice(fromIdx, 1);
+                        list.splice(toIdx, 0, item);
+                        localStorage.setItem('biolab-exp-order', list.map((x: any) => x.id).join(','));
+                        return list;
+                      }
+                      return prev;
+                    });
+                  }
+                  setDragId(null); setOverId(null);
+                }}
+                onDragEnd={() => { setDragId(null); setOverId(null); }}
+                onClick={() => navigateTo('experimentDetail', { experimentId: e.id, projectId: e.projectId })}>
+                <div className="epc-header">
+                  <div className="epc-left">
+                    <div className="epc-title">{e.title}</div>
+                    <div className="epc-meta">{proj?.name} · {e.date} · {e.type}</div>
+                  </div>
+                  <div style={{cursor:'pointer',padding:'2px 6px',fontSize:12,color:'#4a5568',transition:'color 0.2s'}} onClick={(ev) => {ev.stopPropagation(); useStore.getState().deleteExperiment(e.id);}} onMouseEnter={ev=>ev.currentTarget.style.color='#fc8181'} onMouseLeave={ev=>ev.currentTarget.style.color='#4a5568'}>✕</div>
+                </div>
+                <div className="epc-progress">
+                  <div className="epc-bar"><div className="epc-fill" style={{ width: pct + '%', background: 'linear-gradient(90deg, #3a8fd488, #63b3ed)', boxShadow: '0 0 10px rgba(99,179,237,0.25)' }} /></div>
+                  <span className="epc-pct" style={{ color: '#63b3ed' }}>第{daysP}天/{timeline.duration_days}天</span>
+                </div>
+                <div className="epc-steps">
+                  
+                </div>
+              </div>
+            );
+          }) : <div className="card clickable" onClick={() => { localStorage.removeItem('biolab-new-exp-date'); onAction("experiment"); }} style={{cursor:"pointer"}}><div className="empty-sm" style={{color:"#7dd3fc"}}>劳资要做实验！！！</div></div>}
+        </div>
+        <div>
+          <div className="sec-title" style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>未来计划<span style={{cursor:"pointer",color:"#7dd3fc",fontSize:18,lineHeight:1}} onClick={() => { const d = new Date(); d.setDate(d.getDate() + 1); localStorage.setItem('biolab-new-exp-date', d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0')); onAction("experiment"); }}>+</span></div>
+          {(() => {
+            const todayEnd = new Date(); todayEnd.setHours(0,0,0,0);
+            const futureExps = experiments
+              .filter((ex: any) => { const ed = new Date(ex.date + 'T00:00:00'); const td = new Date(); td.setHours(0,0,0,0); return ed > td; })
+              .sort((a: any, b: any) => a.date.localeCompare(b.date));
+            const items = futureExps.map((ex: any) => ({ title: ex.title, label: ex.date + ' · ' + (ex.type || '实验'), expId: ex.id, projId: ex.projectId }));
+            return items.length > 0 ? items.map((it, i) => (
+              <div key={i} className="card compact clickable" style={{ marginBottom: 4, position: 'relative' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }} onClick={() => navigateTo('experimentDetail', { experimentId: it.expId, projectId: it.projId })}>
+                  <div>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: '#f1f5f9' }}>{it.title}</div>
+                    <div style={{ fontSize: 11, color: '#7dd3fc', marginTop: 2 }}>{it.label}</div>
+                  </div>
+                </div>
+                <div style={{position:'absolute',top:8,right:8,cursor:'pointer',padding:'2px 6px',fontSize:12,color:'#4a5568',transition:'color 0.2s'}} onClick={(ev) => {ev.stopPropagation(); useStore.getState().deleteExperiment(it.expId);}} onMouseEnter={ev=>ev.currentTarget.style.color='#fc8181'} onMouseLeave={ev=>ev.currentTarget.style.color='#4a5568'}>✕</div>
+              </div>
+            )) : <div className="card clickable" onClick={() => onAction("experiment")} style={{cursor:"pointer"}}><div className="empty-sm" style={{color:"#7dd3fc"}}>静待花开</div></div>;
+          })()}
+        </div>
+      </div>
+
+            <div className="home-sidebar">
+        <ClockWidget />
+        <CalendarWidget experiments={experiments} onNewExp={() => onAction("experiment")} />
+        <TimerWidget />
+      </div>
+
+
+    </div>
+  );
+}
+
+// ═══ Projects ═══
+function ProjectsPage({ onAction }: { onAction: (t: string) => void }) {
+  const { projects, experiments, results, navigateTo, deleteProject } = useStore();
+  return (
+    <div className="page-container">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div className="page-title">课题</div>
+        <div style={{ padding: '6px 16px', borderRadius: 6, background: 'rgba(125,211,252,0.1)', border: '1px solid rgba(125,211,252,0.2)', color: '#7dd3fc', fontSize: 13, fontWeight: 600, cursor: 'pointer' }} onClick={async () => { const name = await showPrompt('输入课题名称'); if (name) { await useStore.getState().addProject({ name, code: '', direction: '', description: '', leader: '', startDate: new Date().toISOString().slice(0,10), status: '进行中', tags: '[]', budget: 0 } as any); await useStore.getState().loadAll(); } }}>+ 新建课题</div>
       </div>
       <div className="grid-2">
         {projects.map(p => (
           <div key={p.id} className="card clickable" style={{ marginBottom: 0 }} onClick={() => navigateTo('projectDetail', { projectId: p.id })}>
-            <div className="flex justify-between items-center mb-2">
-              <div><div className="font-bold" style={{ fontSize: 16 }}>{p.name}</div><div className="text-xs muted">{p.code} · {p.direction}</div></div>
-              <Badge>{p.status}</Badge>
-            </div>
-            <p className="text-sm" style={{ color: '#6b7280', margin: '10px 0', lineHeight: 1.6 }}>{p.description}</p>
-            <div style={{ display: 'flex', flexWrap: 'wrap', marginBottom: 10 }}>{p.keywords?.map((k: string) => <span key={k} className="tag">{k}</span>)}</div>
-            <div className="meta-row" style={{ borderTop: '1px solid #f1f3f5', paddingTop: 10 }}>
-              <FlaskConical size={14} /> {experiments.filter(e => e.projectId === p.id).length} 实验
-              <BarChart3 size={14} /> {results.filter(r => r.projectId === p.id).length} 结果
-              <span style={{ marginLeft: 'auto' }}><Calendar size={14} /> {p.startDate}</span>
-            </div>
+            <div className="hover-actions"><div className="hover-action-btn danger" onClick={async e => { e.stopPropagation(); if (await showConfirm(`删除"${p.name}"？`)) deleteProject(p.id); }}><Trash2 size={13} /></div></div>
+            <div className="flex items-center gap-2 mb-2"><Badge>{p.status}</Badge>{p.code && <span className="text-xs muted">{p.code}</span>}</div>
+            <div className="font-bold" style={{ fontSize: 15, marginBottom: 4 }}>{p.name}</div>
+            {p.description && <p className="text-sm muted" style={{ marginBottom: 6 }}>{p.description.slice(0, 80)}</p>}
+            {p.keywords?.length > 0 && <div style={{ marginBottom: 6 }}>{p.keywords.map((k: string) => <span key={k} className="tag">{k}</span>)}</div>}
+            <div className="meta-row"><FlaskConical size={12} /> {experiments.filter(e => e.projectId === p.id).length} 实验 {p.leader && <><span>·</span><span>{p.leader}</span></>} {p.startDate && <><Calendar size={12} /><span>{p.startDate}</span></>}</div>
           </div>
         ))}
       </div>
+      {projects.length === 0 && <div className="card"><div className="empty-state clickable-empty" onClick={() => onAction('project')}><div className="empty-icon"><FolderOpen size={22} /></div><h3>暂无课题</h3><p>点击创建第一个课题</p></div></div>}
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// Project Detail
-// ═══════════════════════════════════════
-function ProjectDetail({ onNewExperiment }: { onNewExperiment: () => void }) {
-  const { selectedProjectId, projects, experiments, results, tasks, references, navigateTo, updateTask, deleteTask } = useStore();
-  const [tab, setTab] = useState('overview');
-  const project = projects.find(p => p.id === selectedProjectId);
-  if (!project) return null;
-  const exps = experiments.filter(e => e.projectId === project.id);
-  const res = results.filter(r => r.projectId === project.id);
-  const tsks = tasks.filter(t => t.projectId === project.id);
-  const refs = references.filter(r => r.projectId === project.id);
+// ═══ Project Detail — flat, no tabs ═══
+function ProjectDetailPage({ onAction }: { onAction: (t: string) => void }) {
+  const { selectedProjectId, projects, experiments, results, tasks, references, navigateTo, deleteProject, deleteExperiment, updateTask, deleteTask, deleteReference } = useStore();
+  const p = projects.find(x => x.id === selectedProjectId);
+  if (!p) return null;
+  const exps = experiments.filter(e => e.projectId === p.id);
+  const res = results.filter(r => r.projectId === p.id);
+  const tsks = tasks.filter(t => t.projectId === p.id);
+  const refs = references.filter(r => r.projectId === p.id);
+  return (
+    <div className="page-container">
+      <div className="flex justify-between items-center mb-4">
+        <div><h1 className="page-title">{p.name}</h1><div className="flex items-center gap-2 mt-2"><Badge>{p.status}</Badge><span className="text-xs muted">{[p.code, p.direction, p.leader].filter(Boolean).join(' · ')}</span></div></div>
+        <button className="btn danger sm" onClick={async () => { if (await showConfirm(`删除"${p.name}"？`)) deleteProject(p.id); }}><Trash2 size={13} /></button>
+      </div>
+      <div className="grid-4 mb-4">
+        <div className="stat-card"><span className="stat-value" style={{ color: '#63b3ed' }}>{exps.length}</span><span className="stat-label">实验</span></div>
+        <div className="stat-card"><span className="stat-value" style={{ color: '#48bb78' }}>{res.length}</span><span className="stat-label">结果</span></div>
+        <div className="stat-card"><span className="stat-value" style={{ color: '#ed8936' }}>{tsks.filter(t => t.status !== '已完成').length}</span><span className="stat-label">待办</span></div>
+        <div className="stat-card"><span className="stat-value" style={{ color: '#b794f4' }}>{refs.length}</span><span className="stat-label">文献</span></div>
+      </div>
+      {p.description && <div className="card mb-3"><div className="text-sm" style={{ color: 'var(--text-secondary)', lineHeight: 1.7 }}>{p.description}</div></div>}
 
-  const tabs = [
-    { key: 'overview', label: '概览' }, { key: 'experiments', label: `实验 (${exps.length})` },
-    { key: 'results', label: `结果 (${res.length})` }, { key: 'tasks', label: `任务 (${tsks.length})` },
-    { key: 'references', label: `文献 (${refs.length})` }, { key: 'timeline', label: '时间线' },
-  ];
+      <div className="sec-title">实验 ({exps.length})</div>
+      {exps.map(e => (
+        <div key={e.id} className="card clickable compact" onClick={() => navigateTo('experimentDetail', { experimentId: e.id })}>
+          <div className="hover-actions"><div className="hover-action-btn danger" onClick={async ev => { ev.stopPropagation(); if (await showConfirm(`删除"${e.title}"？`)) deleteExperiment(e.id); }}><Trash2 size={13} /></div></div>
+          <div className="flex justify-between items-center" style={{ paddingRight: 32 }}><span className="font-bold">{e.title}</span></div>
+          <div className="meta-row mt-2"><Calendar size={12} /><span>{e.date}</span><span>{e.type}</span></div>
+        </div>
+
+      ))}
+      {exps.length === 0 && <div className="card"><div className="empty-sm">暂无实验 · <span className="link" onClick={() => onAction('experiment')}>点击创建第一个实验</span></div></div>}
+
+      {res.length > 0 && <><div className="sec-title" style={{ marginTop: 16 }}>结果 ({res.length})</div>
+        <div className="grid-2 mb-3">{res.map(r => <div key={r.id} className="card compact" style={{ marginBottom: 0 }}><div className="flex justify-between"><span className="font-bold text-sm">{r.title}</span><Badge status={r.supportsHypothesis ? '成功' : '失败'}>{r.supportsHypothesis ? '支持' : '不支持'}</Badge></div><p className="text-xs muted mt-2">{r.summary}</p></div>)}</div></>}
+
+      {tsks.length > 0 && <><div className="sec-title" style={{ marginTop: 16 }}>任务 ({tsks.length})</div>
+        {tsks.map(t => <div key={t.id} className="card compact flex items-center gap-2"><input type="checkbox" checked={t.status === '已完成'} onChange={() => updateTask(t.id, { status: t.status === '已完成' ? '待处理' : '已完成' })} /><span className="flex-1 text-sm" style={{ opacity: t.status === '已完成' ? 0.4 : 1 }}>{t.name}</span><Badge status={t.priority}>{t.priority}</Badge><Trash2 size={12} style={{ cursor: 'pointer', color: 'var(--text-dim)' }} onClick={() => deleteTask(t.id)} /></div>)}</>}
+
+      {refs.length > 0 && <><div className="sec-title" style={{ marginTop: 16 }}>文献 ({refs.length})</div>
+        {refs.map(r => <div key={r.id} className="card compact"><div className="hover-actions"><div className="hover-action-btn danger" onClick={() => { deleteReference(r.id); }}><Trash2 size={13} /></div></div><div className="font-bold text-sm">{r.title}</div><div className="text-xs muted">{r.authors} · <em>{r.journal}</em> ({r.year})</div></div>)}</>}
+    </div>
+  );
+}
+
+
+// ═══ Timeline Card ═══
+function TimelineCard({ timeline, daysPassed, dayPct, onSave }: { timeline: any; daysPassed: number; dayPct: number; onSave: (tl: any) => void }) {
+  const [adding, setAdding] = useState(false);
+  const [scrollDay, setScrollDay] = useState(3);
+  const [nl, setNl] = useState('');
+  const [editTotal, setEditTotal] = useState(false);
+  const [totalVal, setTotalVal] = useState(String(timeline.duration_days));
+  const [dragIdx, setDragIdx] = useState<number | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+
+  const allMs: any[] = timeline.milestones || [];
+  const maxDay = timeline.duration_days;
+  const dayRange = Array.from({ length: maxDay }, (_, i) => i + 1);
+  const latestRef = useRef(allMs);
+  latestRef.current = allMs;
+
+  useEffect(() => { setTotalVal(String(timeline.duration_days)); }, [timeline.duration_days]);
+
+  const add = () => { if (!nl.trim()) return; onSave({ ...timeline, milestones: [...allMs, { day: scrollDay, label: nl.trim() }] }); setAdding(false); setNl(''); };
+  const saveTotal = () => { const v = parseInt(totalVal) || 30; onSave({ ...timeline, duration_days: Math.max(1, v) }); setEditTotal(false); };
+
+  // Count how many nodes at each day
+  const dayCounts: Record<number, number> = {};
+  allMs.forEach((m: any) => { dayCounts[m.day] = (dayCounts[m.day] || 0) + 1; });
+
+  const handleMouseDown = (e: React.MouseEvent, origIdx: number) => {
+    e.preventDefault(); e.stopPropagation();
+    setDragIdx(origIdx);
+
+    const onMove = (ev: MouseEvent) => {
+      if (!barRef.current) return;
+      const rect = barRef.current.getBoundingClientRect();
+      const pct = Math.max(0, Math.min(1, (ev.clientX - rect.left) / rect.width));
+      let newDay = Math.max(0, Math.min(maxDay, Math.round(pct * maxDay)));
+      const cur = latestRef.current;
+      const curDay = cur[origIdx]?.day || 0;
+      // Count others at target day
+      const othersAtDay = cur.filter((m: any, i: number) => i !== origIdx && m.day === newDay).length;
+      // Max 2 per day — but always allow moving toward mouse direction
+      if (newDay > 0 && othersAtDay >= 2) {
+        const dir = newDay > curDay ? 1 : newDay < curDay ? -1 : 0;
+        let found = false;
+        for (let off = 1; off <= maxDay; off++) {
+          // Prefer direction user is dragging
+          const tries = dir !== 0 ? [newDay + dir * off, newDay - dir * off] : [newDay - off, newDay + off];
+          for (const t of tries) {
+            if (t > 0 && t <= maxDay && cur.filter((m: any, i: number) => i !== origIdx && m.day === t).length < 2) {
+              newDay = t; found = true; break;
+            }
+          }
+          if (found) break;
+        }
+      }
+      const updated = cur.map((m: any, i: number) => i === origIdx ? { ...m, day: newDay } : m);
+      onSave({ ...timeline, milestones: updated });
+    };
+
+    const onUp = () => {
+      const cleaned = latestRef.current.filter((m: any) => m.day > 0);
+      if (cleaned.length < latestRef.current.length) onSave({ ...timeline, milestones: cleaned });
+      setDragIdx(null);
+      window.removeEventListener('mousemove', onMove);
+      window.removeEventListener('mouseup', onUp);
+    };
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+  };
+
+  // Build render list with position info
+  const sorted = allMs.map((m: any, i: number) => ({ ...m, _idx: i })).sort((a: any, b: any) => a.day - b.day);
+  const daySlots: Record<number, number> = {};
+  const renderList = sorted.map((m: any) => {
+    const slot = daySlots[m.day] || 0;
+    daySlots[m.day] = slot + 1;
+    return { ...m, _slot: slot };
+  });
 
   return (
-    <div>
-      <div className="back-nav">
-        <span className="back-btn" onClick={() => navigateTo('projects')}><ArrowLeft size={18} /></span>
-        <div className="flex-1">
-          <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 2 }}>{project.name}</h1>
-          <div className="flex items-center gap-3"><Badge>{project.status}</Badge><span className="muted text-sm">{project.code} · {project.direction} · {project.leader}</span></div>
-        </div>
-        <button className="btn primary" onClick={onNewExperiment}><Plus size={16} /> 新建实验</button>
-      </div>
-      <div className="tab-bar">{tabs.map(t => <div key={t.key} className={`tab ${tab === t.key ? 'active' : ''}`} onClick={() => setTab(t.key)}>{t.label}</div>)}</div>
-
-      {tab === 'overview' && (
-        <div className="grid-2">
-          <div>
-            <div className="card"><h3 style={{ fontWeight: 600, marginBottom: 8 }}>项目简介</h3><p className="text-sm" style={{ lineHeight: 1.7, color: '#374151' }}>{project.description}</p><div style={{ display: 'flex', flexWrap: 'wrap', marginTop: 12 }}>{project.keywords?.map((k: string) => <span key={k} className="tag">{k}</span>)}</div></div>
-            <div className="card"><h3 style={{ fontWeight: 600, marginBottom: 8 }}>里程碑</h3><pre style={{ fontSize: 13, lineHeight: 1.7, whiteSpace: 'pre-wrap', fontFamily: 'inherit' }}>{project.milestones}</pre></div>
+    <div className="tl-card">
+      <div className="tl-top">
+        <span className="tl-day">第 {daysPassed} 天</span>
+        {editTotal ? (
+          <div className="tl-total-edit">
+            <input className="tl-total-input" value={totalVal} onChange={e => setTotalVal(e.target.value)} autoFocus onBlur={saveTotal} onKeyDown={e => { if (e.key === 'Enter') saveTotal(); if (e.key === 'Escape') setEditTotal(false); }} />
+            <span className="tl-total-unit">天</span>
           </div>
-          <div>
-            <div className="grid-2 mb-4">
-              <div className="stat-card"><span className="stat-value" style={{ color: '#2563eb' }}>{exps.length}</span><span className="stat-label">实验记录</span></div>
-              <div className="stat-card"><span className="stat-value" style={{ color: '#059669' }}>{res.length}</span><span className="stat-label">实验结果</span></div>
+        ) : (
+          <span className="tl-total" onClick={() => setEditTotal(true)}>{maxDay} 天</span>
+        )}
+      </div>
+
+      <div className="tl-track" ref={barRef}>
+        <div className="tl-line"><div className="tl-line-fill" style={{ width: dayPct+'%' }} /></div>
+        <div className="tl-today" style={{ left: dayPct+'%' }} />
+
+        <div className={`tl-n tl-n-zero ${allMs.length > 0 ? 'has-nodes' : ''}`} style={{ left: '0%' }} onClick={() => { if (allMs.length > 0) onSave({ ...timeline, milestones: [] }); }}>
+          <div className="tl-n-sphere zero-sphere">{allMs.length > 0 ? <Trash2 size={10} /> : <span>0</span>}</div>
+        </div>
+
+        {renderList.map((m: any) => {
+          const oi = m._idx;
+          const p = Math.min(100, Math.max(0, (m.day / maxDay) * 100));
+          const done = daysPassed >= m.day;
+          const isDrag = dragIdx === oi;
+          const isStacked = m._slot > 0;
+          const hasStack = dayCounts[m.day] > 1;
+          return (
+            <div key={oi} className={`tl-n ${done?'done':''} ${isDrag?'drag':''} ${isStacked?'stacked':''} ${hasStack?'has-stack':''}`} style={{ left: p+'%' }} onMouseDown={e => handleMouseDown(e, oi)}>
+              {!isStacked && <div className="tl-n-label">{m.label}</div>}
+              <div className="tl-n-sphere"><span>{m.day}</span></div>
+              {isStacked && <div className="tl-n-label-below">{m.label}</div>}
             </div>
-            <div className="card"><h3 style={{ fontWeight: 600, marginBottom: 8 }}>最近实验</h3>
-              {exps.slice(0, 3).map(e => (
-                <div key={e.id} style={{ padding: '8px 0', borderBottom: '1px solid #f1f3f5', cursor: 'pointer' }} className="flex justify-between" onClick={() => navigateTo('experimentDetail', { experimentId: e.id })}>
-                  <span className="text-sm font-bold">{e.title}</span><Badge>{e.status}</Badge>
-                </div>
-              ))}
+          );
+        })}
+
+        <div className="tl-n tl-n-end" style={{ left: '100%' }} onClick={() => { setScrollDay(Math.min(maxDay, daysPassed + 3 || 3)); setAdding(true); }}>
+          <div className="tl-n-sphere end-sphere"><Plus size={10} /></div>
+        </div>
+      </div>
+
+      {adding && (
+        <div className="tl-add-float">
+          <div className="tl-add-cols">
+            <div className="ios-picker-col">
+              <div className="ios-picker">
+                {dayRange.map(d => { const full = allMs.filter((m: any) => m.day === d).length >= 2; return <div key={d} className={`ios-item ${scrollDay===d?'scroll-selected':''} ${full?'ios-disabled':''}`} onClick={() => { if (!full) setScrollDay(d); }}>{d}</div>; })}
+              </div>
+              <div className="ios-label">天</div>
+            </div>
+            <div className="tl-add-right">
+              <input className="tl-add-txt" value={nl} onChange={e=>setNl(e.target.value)} autoFocus onBlur={() => { if (nl.trim()) add(); else setAdding(false); }} onKeyDown={e=>{if(e.key==='Enter'){e.preventDefault();add();}if(e.key==='Escape')setAdding(false);}} />
+              
             </div>
           </div>
         </div>
       )}
-
-      {tab === 'experiments' && exps.map(e => (
-        <div key={e.id} className="card clickable" onClick={() => navigateTo('experimentDetail', { experimentId: e.id })}>
-          <div className="flex justify-between items-center mb-2"><span className="font-bold" style={{ fontSize: 15 }}>{e.title}</span><Badge>{e.status}</Badge></div>
-          <div className="meta-row mb-2"><Calendar size={14} /> {e.date} · {e.type}</div>
-          <p className="text-sm muted">{e.purpose}</p>
-        </div>
-      ))}
-
-      {tab === 'results' && <div className="grid-2">{res.map(r => (
-        <div key={r.id} className="card" style={{ marginBottom: 0 }}>
-          <div className="flex justify-between mb-2"><span className="font-bold text-sm">{r.title}</span><Badge status={r.supportsHypothesis ? '成功' : '失败'}>{r.supportsHypothesis ? '支持假设' : '不支持'}</Badge></div>
-          <p className="text-sm muted">{r.summary}</p><span className="tag mt-2">{r.type}</span>
-        </div>
-      ))}</div>}
-
-      {tab === 'tasks' && tsks.map(t => (
-        <div key={t.id} className="card compact flex items-center gap-3">
-          <input type="checkbox" checked={t.status === '已完成'} onChange={() => updateTask(t.id, { status: t.status === '已完成' ? '待处理' : '已完成' })} />
-          <div className="flex-1" style={{ textDecoration: t.status === '已完成' ? 'line-through' : 'none', opacity: t.status === '已完成' ? 0.5 : 1 }}>
-            <div className="font-bold text-sm">{t.name}</div><div className="text-xs muted">{t.assignee} · {t.dueDate ? formatDate(t.dueDate) : '无截止日'}</div>
-          </div>
-          <Badge status={t.priority}>{t.priority}</Badge>
-          <Trash2 size={16} style={{ cursor: 'pointer', color: '#d1d5db' }} onClick={() => deleteTask(t.id)} />
-        </div>
-      ))}
-
-      {tab === 'references' && refs.map(r => (
-        <div key={r.id} className="card">
-          <div className="font-bold" style={{ fontSize: 15, marginBottom: 4 }}>{r.title}</div>
-          <div className="text-sm muted mb-2">{r.authors} · <em>{r.journal}</em> ({r.year})</div>
-          <div className="text-sm"><strong>核心结论：</strong>{r.coreConclusion}</div>
-          <div className="text-sm" style={{ color: '#2563eb' }}><strong>与课题关系：</strong>{r.relation}</div>
-        </div>
-      ))}
-
-      {tab === 'timeline' && <div className="card"><div className="timeline">
-        {[...exps].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()).map(e => (
-          <div key={e.id} className="timeline-item" style={{ cursor: 'pointer' }} onClick={() => navigateTo('experimentDetail', { experimentId: e.id })}>
-            <div className="timeline-dot" /><div className="text-xs muted">{formatDate(e.date)}</div>
-            <div className="font-bold text-sm">{e.title}</div><div className="text-sm muted">{e.conclusion?.slice(0, 100)}</div>
-            <Badge>{e.status}</Badge>
-          </div>
-        ))}
-      </div></div>}
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// Experiment Detail
-// ═══════════════════════════════════════
-function ExperimentDetail() {
-  const { selectedExperimentId, experiments, projects, results, navigateTo } = useStore();
+
+// ═══ Experiment Detail — Time Progress + Results with Files ═══
+function ExperimentDetailPage() {
+  const { selectedExperimentId, experiments, projects, navigateTo, deleteExperiment } = useStore();
+  const [files, setFiles] = useState<any[]>([]);
+  const [editing, setEditing] = useState<string | null>(null);
+  const [editValue, setEditValue] = useState('');
+  const [activeSection, setActiveSection] = useState('purpose');
+  const [lightboxImg, setLightboxImg] = useState<string | null>(null);
+  const [editingTimeline, setEditingTimeline] = useState(false);
   const exp = experiments.find(e => e.id === selectedExperimentId);
+
+  const loadFiles = useCallback(async () => {
+    if (!exp) return;
+    try { const { invoke } = await import('@tauri-apps/api/core'); setFiles(await invoke<any[]>('get_experiment_files', { experimentId: exp.id })); } catch {}
+  }, [exp?.id]);
+  useEffect(() => { loadFiles(); }, [loadFiles]);
   if (!exp) return null;
   const proj = projects.find(p => p.id === exp.projectId);
-  const expResults = results.filter(r => r.experimentId === exp.id);
 
-  const Section = ({ title, content }: { title: string; content?: string }) => {
-    if (!content) return null;
-    return <div className="detail-section"><h4>{title}</h4><pre>{content}</pre></div>;
+  // Parse timeline from parameters field
+  let timeline: { duration_days: number; milestones: { day: number; label: string }[] } = { duration_days: 30, milestones: [] };
+  try { if (exp.parameters) timeline = JSON.parse(exp.parameters); } catch {}
+  if (!timeline.milestones) timeline.milestones = [];
+  if (!timeline.duration_days) timeline.duration_days = 30;
+
+  // Calculate day progress
+  const startDate = new Date(exp.date);
+  const now = new Date();
+  const daysPassed = Math.max(0, Math.floor((now.getTime() - startDate.getTime()) / 86400000));
+  const dayPct = Math.min(100, Math.round((daysPassed / timeline.duration_days) * 100));
+
+  // Find next milestone
+  const sortedMs = [...timeline.milestones].sort((a, b) => a.day - b.day);
+  const nextMs = sortedMs.find(m => m.day > daysPassed);
+
+  const notes = [exp.issues, exp.nextSteps].filter(Boolean).join('\n---\n');
+
+  const startEdit = (field: string, value: string) => { setEditing(field); setEditValue(value || ''); };
+  const saveEdit = async () => {
+    if (!editing || !exp) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const vals: any = { purpose: exp.purpose||'', materials: exp.materials||'', steps: exp.steps||'', results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'' };
+      if (editing === 'notes') { vals.issues = editValue; vals.nextSteps = ''; }
+      else { vals[editing] = editValue; }
+      await invoke('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: vals.purpose, materials: vals.materials, steps: vals.steps, parameters: exp.parameters||'', results: vals.results, conclusion: vals.conclusion, issues: vals.issues, nextSteps: vals.nextSteps, status: exp.status||'进行中' });
+      await useStore.getState().loadAll();
+    } catch (e: any) { console.error(e); }
+    setEditing(null);
+  };
+
+  const saveTimeline = async (tl: typeof timeline) => {
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: exp.steps||'', parameters: JSON.stringify(tl), results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' });
+      await useStore.getState().loadAll();
+    } catch (e: any) { console.error(e); }
+  };
+
+  const addMilestone = async () => {
+    const dayStr = await showPrompt('第几天？', String(daysPassed + 3));
+    if (!dayStr) return;
+    const label = await showPrompt('操作内容？', '');
+    if (!label) return;
+    const newTl = { ...timeline, milestones: [...timeline.milestones, { day: parseInt(dayStr), label }] };
+    saveTimeline(newTl);
+  };
+
+  const removeMilestone = (idx: number) => {
+    const newTl = { ...timeline, milestones: timeline.milestones.filter((_, i) => i !== idx) };
+    saveTimeline(newTl);
+  };
+
+  const setDuration = async () => {
+    const d = await showPrompt('实验总天数？', String(timeline.duration_days));
+    if (d) { saveTimeline({ ...timeline, duration_days: parseInt(d) || 30 }); }
+  };
+
+  // Image files for inline display
+  const imageExts = ['png', 'jpg', 'jpeg', 'gif', 'bmp', 'webp', 'tiff'];
+  const imageFiles = files.filter(f => imageExts.includes((f.file_type || '').toLowerCase()));
+  const otherFiles = files.filter(f => !imageExts.includes((f.file_type || '').toLowerCase()));
+
+  const doSave = async (field: string, value: string) => {
+    if (!exp) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      const vals: any = { purpose: exp.purpose||'', materials: exp.materials||'', steps: exp.steps||'', results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'' };
+      if (field === 'notes') { vals.issues = value; vals.nextSteps = ''; }
+      else { vals[field] = value; }
+      await invoke('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: vals.purpose, materials: vals.materials, steps: vals.steps, parameters: exp.parameters||'', results: vals.results, conclusion: vals.conclusion, issues: vals.issues, nextSteps: vals.nextSteps, status: exp.status||'进行中' });
+      await useStore.getState().loadAll();
+    } catch (e: any) { console.error('保存失败:', e); }
+  };
+
+  const sections = [
+    { key: 'purpose', label: '实验目的', icon: '◎', content: exp.purpose },
+    { key: 'materials', label: '样本材料', icon: '◈', content: exp.materials },
+    { key: 'steps', label: '实验步骤', icon: '☰', content: exp.steps },
+    { key: 'results', label: '实验结果', icon: '◆', content: exp.results },
+    { key: 'conclusion', label: '结论', icon: '✦', content: exp.conclusion },
+    { key: 'notes', label: '备注', icon: '≡', content: notes },
+  ];
+
+  const EditBlock = ({ field, content }: { field: string; content?: string }) => {
+    if (editing === field) {
+      return <textarea className="exp-edit-textarea" defaultValue={content || ''} autoFocus
+        onBlur={(ev) => { const val = ev.target.value; setEditing(null); if (val !== (content || '')) doSave(field, val); }}
+        onKeyDown={e => { if (e.key === 'Escape') setEditing(null); }} />;
+    }
+    return (
+      <div className="exp-content-block" onClick={() => setEditing(field)}>
+        {content ? <div className="exp-content-text">{content}</div> : <div className="exp-content-empty">点击填写</div>}
+      </div>
+    );
+  };
+
+  const activeSec = sections.find(s => s.key === activeSection);
+
+  return (
+    <div className="page-container">
+      {/* Header */}
+      <div className="exp-detail-header">
+        <div className="flex-1">
+          <h1 className="page-title" style={{ cursor: 'text' }} onClick={async () => { const newTitle = await showPrompt('修改实验名称', exp.title); if (newTitle && newTitle !== exp.title) { try { const { invoke: inv } = await import('@tauri-apps/api/core'); await inv('update_experiment', { id: exp.id, title: newTitle, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: exp.steps||'', parameters: exp.parameters||'', results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' }); await useStore.getState().loadAll(); } catch(err) { console.error(err); } } }}>{exp.title}</h1>
+          <div className="flex items-center gap-2 mt-2">
+            <span className="text-xs muted"><Calendar size={12} /> {formatDate(exp.date)} · {exp.type}</span>
+            {proj && <span className="text-xs muted">· {proj.name}</span>}
+          </div>
+        </div>
+        
+        <button className="btn danger sm" onClick={() => { deleteExperiment(exp.id); }}><Trash2 size={13} /></button>
+      </div>
+
+      {/* Time progress bar */}
+      <TimelineCard 
+        timeline={timeline} 
+        daysPassed={daysPassed} 
+        dayPct={dayPct}
+        onSave={saveTimeline}
+      />
+
+      {/* Section nav */}
+      <div className="exp-section-nav">
+        {sections.map(s => (
+          <div key={s.key} className={`exp-nav-item ${activeSection === s.key ? 'active' : ''}`} onClick={() => setActiveSection(s.key)}>
+            <span>{s.label}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* Content */}
+      <div className="exp-detail-body" style={{ gridTemplateColumns: "1fr" }}>
+        <div className="exp-sections-scroll">
+          {activeSec && (
+            <div className="exp-section-card active-section">
+              <div className="exp-section-label"><span>{activeSec.label}</span></div>
+              <EditBlock field={activeSec.key} content={activeSec.content} />
+              {/* Show files under results section */}
+              {activeSec.key === 'results' && (
+                <div className="results-files-area">
+                  <FileUploadZone experimentId={exp.id} projectId={exp.projectId} files={otherFiles} onFilesChanged={loadFiles} />
+                  {/* Inline image gallery */}
+                  {imageFiles.length > 0 && (
+                    <div className="img-gallery">
+                      {imageFiles.map((f: any) => {
+                        const imgSrc = f.local_path ? `asset://localhost/${f.local_path}` : '';
+                        return (
+                          <div key={f.id} className="img-thumb" onClick={async () => {
+                            try { const { invoke } = await import('@tauri-apps/api/core'); const dir = await invoke<string>('get_data_dir'); setLightboxImg(dir + '/' + f.local_path); } catch {}
+                          }}>
+                            <div className="img-thumb-name">{f.name || f.original_name}</div>
+                            <div className="img-thumb-icon">🖼️</div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+      </div>
+
+      {/* Lightbox */}
+      {lightboxImg && (
+        <div className="overlay" onClick={() => setLightboxImg(null)} style={{ alignItems: 'center', paddingTop: 0 }}>
+          <div style={{ maxWidth: '90vw', maxHeight: '90vh', position: 'relative' }} onClick={e => e.stopPropagation()}>
+            <img src={'asset://localhost/' + lightboxImg} style={{ maxWidth: '100%', maxHeight: '85vh', borderRadius: 8, boxShadow: '0 20px 60px rgba(0,0,0,0.6)' }} alt="" />
+            <div style={{ position: 'absolute', top: -36, right: 0, cursor: 'pointer', color: '#fff', fontSize: 24 }} onClick={() => setLightboxImg(null)}>✕</div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ═══ Experiments List ═══
+function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
+  const { experiments, projects, navigateTo, deleteExperiment } = useStore();
+  const [sortKey, setSortKey] = useState<'title'|'date'|'project'>('date');
+  const [sortAsc, setSortAsc] = useState(false);
+
+  const toggleSort = (key: 'title'|'date'|'project') => {
+    if (sortKey === key) setSortAsc(!sortAsc);
+    else { setSortKey(key); setSortAsc(true); }
+  };
+
+  const sorted = [...experiments].sort((a: any, b: any) => {
+    let va = '', vb = '';
+    if (sortKey === 'title') { va = a.title; vb = b.title; }
+    else if (sortKey === 'date') { va = a.date; vb = b.date; }
+    else { const pa = projects.find((p: any) => p.id === a.projectId); const pb = projects.find((p: any) => p.id === b.projectId); va = pa?.name || ''; vb = pb?.name || ''; }
+    return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+  });
+
+  const arrow = (key: string) => sortKey === key ? (sortAsc ? ' ↑' : ' ↓') : '';
+
+  return (
+    <div className="page-container">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+        <div className="page-title">实验</div>
+        <div style={{ padding: '6px 16px', borderRadius: 6, background: 'rgba(125,211,252,0.1)', border: '1px solid rgba(125,211,252,0.2)', color: '#7dd3fc', fontSize: 13, fontWeight: 600, cursor: 'pointer' }} onClick={() => onAction('experiment')}>+ 新建实验</div>
+      </div>
+
+      {/* Table header */}
+      <div style={{ display: 'flex', alignItems: 'center', padding: '8px 14px', borderBottom: '1px solid rgba(125,211,252,0.08)', marginBottom: 4 }}>
+        <div style={{ flex: 3, fontSize: 12, fontWeight: 600, color: sortKey==='title'?'#7dd3fc':'#718096', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('title')}>实验标题{arrow('title')}</div>
+        <div style={{ flex: 1.5, fontSize: 12, fontWeight: 600, color: sortKey==='date'?'#7dd3fc':'#718096', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('date')}>时间{arrow('date')}</div>
+        <div style={{ flex: 2, fontSize: 12, fontWeight: 600, color: sortKey==='project'?'#7dd3fc':'#718096', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('project')}>所属课题{arrow('project')}</div>
+        <div style={{ width: 28 }} />
+      </div>
+
+      {/* Rows */}
+      {sorted.map((e: any) => {
+        const proj = projects.find((p: any) => p.id === e.projectId);
+        return (
+          <div key={e.id} style={{
+            display: 'flex', alignItems: 'center', padding: '10px 14px', cursor: 'pointer',
+            borderRadius: 6, transition: 'background 0.15s', borderBottom: '1px solid rgba(255,255,255,0.02)',
+          }}
+            onClick={() => navigateTo('experimentDetail', { experimentId: e.id, projectId: e.projectId })}
+            onMouseEnter={e => e.currentTarget.style.background = 'rgba(125,211,252,0.04)'}
+            onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+          >
+            <div style={{ flex: 3, fontSize: 13, fontWeight: 600, color: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title}</div>
+            <div style={{ flex: 1.5, fontSize: 12, color: '#718096' }}>{e.date}</div>
+            <div style={{ flex: 2, fontSize: 12, color: '#90cdf4' }}>{proj?.name || '-'}</div>
+            <div style={{ width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#4a5568', flexShrink: 0, transition: 'color 0.2s' }}
+              onClick={(ev) => { ev.stopPropagation(); deleteExperiment(e.id); }}
+              onMouseEnter={ev => ev.currentTarget.style.color = '#fc8181'}
+              onMouseLeave={ev => ev.currentTarget.style.color = '#4a5568'}
+            ><Trash2 size={13} /></div>
+          </div>
+        );
+      })}
+
+      {experiments.length === 0 && <div className="card" style={{ marginTop: 12 }}><div className="empty-state clickable-empty" onClick={() => onAction('experiment')}><div className="empty-icon"><FlaskConical size={22} /></div><h3>暂无实验</h3><p>点击创建第一个实验</p></div></div>}
+    </div>
+  );
+}
+
+// ═══ Results ═══
+function ResultsPage() {
+  const { results, experiments, deleteResult } = useStore();
+  return (
+    <div className="page-container">
+      <div className="page-title mb-3">结果中心</div>
+      <div className="grid-4 mb-4">{[{ l: '全部', n: results.length, c: '#63b3ed' }, { l: '支持假设', n: results.filter(r => r.supportsHypothesis).length, c: '#48bb78' }, { l: '不支持', n: results.filter(r => !r.supportsHypothesis).length, c: '#fc8181' }, { l: '图表', n: results.filter(r => r.type === '图片' || r.type === '图表').length, c: '#b794f4' }].map((s, i) => <div key={i} className="stat-card"><span className="stat-value" style={{ color: s.c }}>{s.n}</span><span className="stat-label">{s.l}</span></div>)}</div>
+      <div className="grid-2">{results.map(r => { const exp = experiments.find(e => e.id === r.experimentId); return (
+        <div key={r.id} className="card" style={{ marginBottom: 0 }}><div className="hover-actions"><div className="hover-action-btn danger" onClick={async () => { if (await showConfirm('删除？')) deleteResult(r.id); }}><Trash2 size={13} /></div></div>
+          <div className="flex justify-between mb-2"><span className="font-bold text-sm">{r.title}</span><Badge status={r.supportsHypothesis ? '成功' : '失败'}>{r.supportsHypothesis ? '支持' : '不支持'}</Badge></div>
+          <p className="text-xs muted">{r.summary}</p><div className="meta-row mt-2"><span className="tag">{r.type}</span>{exp && <span className="text-xs muted">{exp.title}</span>}</div></div>); })}</div>
+      {results.length === 0 && <div className="card"><div className="empty-state"><div className="empty-icon"><BarChart3 size={22} /></div><h3>暂无结果</h3><p>在实验详情页添加</p></div></div>}
+    </div>
+  );
+}
+
+function LibraryPage({ onAction }: { onAction: (t: string) => void }) {
+  const { references, projects, experiments, deleteReference, navigateTo } = useStore();
+  const [search, setSearch] = useState('');
+  const [readingPdf, setReadingPdf] = useState<{path: string; title: string} | null>(null);
+  const [linkingRef, setLinkingRef] = useState<string | null>(null);
+
+  const filtered = search ? references.filter((r: any) =>
+    r.title?.toLowerCase().includes(search.toLowerCase()) ||
+    r.authors?.toLowerCase().includes(search.toLowerCase())
+  ) : references;
+
+  const getLink = (ref: any) => {
+    if (!ref.journal || !ref.journal.includes(':')) return null;
+    const [type, id] = ref.journal.split(':');
+    if (type === 'project') { const p = projects.find((p: any) => p.id === id); return p ? { type: '课题', name: p.name, id } : null; }
+    if (type === 'experiment') { const e = experiments.find((e: any) => e.id === id); return e ? { type: '实验', name: e.title, id } : null; }
+    return null;
   };
 
   return (
-    <div>
-      <div className="back-nav">
-        <span className="back-btn" onClick={() => proj ? navigateTo('projectDetail', { projectId: proj.id }) : navigateTo('experiments')}><ArrowLeft size={18} /></span>
-        <div className="flex-1">
-          {proj && <div className="flex items-center gap-2 mb-2"><span className="breadcrumb" onClick={() => navigateTo('projectDetail', { projectId: proj.id })}>{proj.name}</span><ChevronRight size={14} color="#d1d5db" /></div>}
-          <h1 style={{ fontSize: 24, fontWeight: 700, marginBottom: 2 }}>{exp.title}</h1>
-          <div className="flex items-center gap-3"><Badge>{exp.status}</Badge><span className="muted text-sm"><Calendar size={14} /> {formatDate(exp.date)} · {exp.type}</span></div>
+    <div className="page-container">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div className="page-title">文献</div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input className="form-input" style={{ width: 200, padding: '6px 12px', fontSize: 12 }} value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索文献..." />
+          <div style={{ padding: '6px 16px', borderRadius: 6, background: 'rgba(125,211,252,0.1)', border: '1px solid rgba(125,211,252,0.2)', color: '#7dd3fc', fontSize: 13, fontWeight: 600, cursor: 'pointer' }} onClick={() => onAction('reference')}>+ 添加</div>
         </div>
       </div>
-      <div className="grid-3" style={{ gridTemplateColumns: '2fr 1fr' }}>
-        <div className="card">
-          <Section title="实验目的" content={exp.purpose} />
-          <Section title="样本/材料" content={exp.materials} />
-          <Section title="实验步骤" content={exp.steps} />
-          <Section title="关键参数" content={exp.parameters} />
-          <Section title="实验结果" content={exp.results} />
-          <Section title="初步结论" content={exp.conclusion} />
-          <Section title="问题与异常" content={exp.issues} />
-          <Section title="下一步计划" content={exp.nextSteps} />
-        </div>
-        <div>
-          <div className="card"><h3 style={{ fontWeight: 600, fontSize: 14, marginBottom: 8 }}>关联结果 ({expResults.length})</h3>
-            {expResults.map(r => (
-              <div key={r.id} style={{ padding: '8px 0', borderBottom: '1px solid #f1f3f5' }}>
-                <div className="flex justify-between items-center"><span className="text-sm font-bold">{r.title}</span><span style={{ fontSize: 11, color: r.supportsHypothesis ? '#059669' : '#dc2626' }}>{r.supportsHypothesis ? '✓ 支持' : '✗ 不支持'}</span></div>
-                <div className="text-xs muted">{r.summary}</div>
-              </div>
-            ))}
-            {expResults.length === 0 && <div className="text-sm muted">暂无关联结果</div>}
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
-// ═══════════════════════════════════════
-// Experiments List
-// ═══════════════════════════════════════
-function ExperimentsList({ onNewExperiment }: { onNewExperiment: () => void }) {
-  const { experiments, projects, results, navigateTo } = useStore();
-  const [filter, setFilter] = useState('all');
-  const filtered = filter === 'all' ? experiments : experiments.filter(e => e.status === filter);
-  return (
-    <div>
-      <div className="page-header flex justify-between items-center">
-        <div><h1>实验记录</h1><p>所有实验的结构化记录</p></div>
-        <button className="btn primary" onClick={onNewExperiment}><Plus size={16} /> 新建实验</button>
-      </div>
-      <div className="flex gap-2 mb-4">
-        {['all', '成功', '失败', '待复验', '进行中', '待处理'].map(f => (
-          <button key={f} className={`btn sm ${filter === f ? 'primary' : ''}`} onClick={() => setFilter(f)}>{f === 'all' ? '全部' : f}</button>
-        ))}
-      </div>
-      {filtered.map(e => {
-        const proj = projects.find(p => p.id === e.projectId);
-        return (
-          <div key={e.id} className="card clickable" onClick={() => navigateTo('experimentDetail', { experimentId: e.id, projectId: e.projectId })}>
-            <div className="flex justify-between items-center mb-2"><div><span className="font-bold" style={{ fontSize: 15 }}>{e.title}</span>{proj && <span className="text-xs" style={{ color: '#2563eb', marginLeft: 10 }}><Link2 size={12} /> {proj.name}</span>}</div><Badge>{e.status}</Badge></div>
-            <div className="meta-row mb-2"><Calendar size={14} /> {e.date} · {e.type} · {results.filter(r => r.experimentId === e.id).length} 个结果</div>
-            <p className="text-sm muted">{e.purpose}</p>
-            {e.conclusion && <p className="text-sm font-bold mt-2" style={{ color: '#374151' }}>结论: {e.conclusion.slice(0, 120)}...</p>}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
+      {filtered.length === 0 && (
+        <div className="card clickable" onClick={() => onAction('reference')} style={{ textAlign: 'center', padding: 30 }}>
+          <div style={{ fontSize: 28, marginBottom: 8 }}>📚</div>
+          <div style={{ color: '#7dd3fc', fontSize: 14 }}>点击添加第一篇文献</div>
+        </div>
+      )}
 
-// ═══════════════════════════════════════
-// Files Page
-// ═══════════════════════════════════════
-function FilesPage() {
-  const { files } = useStore();
-  const [typeFilter, setTypeFilter] = useState('all');
-  const types = [...new Set(files.map(f => f.fileType))];
-  const filtered = typeFilter === 'all' ? files : files.filter(f => f.fileType === typeFilter);
-  return (
-    <div>
-      <div className="page-header"><h1>文件管理</h1><p>管理所有科研附件和数据文件</p></div>
-      <div className="flex gap-2 mb-4" style={{ flexWrap: 'wrap' }}>
-        <button className={`btn sm ${typeFilter === 'all' ? 'primary' : ''}`} onClick={() => setTypeFilter('all')}>全部 ({files.length})</button>
-        {types.map(t => <button key={t} className={`btn sm ${typeFilter === t ? 'primary' : ''}`} onClick={() => setTypeFilter(t)}>{FILE_ICONS[t] || FILE_ICONS.default} {t}</button>)}
-      </div>
-      <div className="file-grid">
-        {filtered.map(f => (
-          <div key={f.id} className="card compact" style={{ marginBottom: 0 }}>
-            <div className="file-card">
-              <span className="file-icon">{FILE_ICONS[f.fileType] || FILE_ICONS.default}</span>
-              <div className="file-info"><div className="file-name">{f.name}</div><div className="file-meta">{formatFileSize(f.fileSize)} · {f.createdAt}</div>
-                <div style={{ display: 'flex', flexWrap: 'wrap', marginTop: 4 }}>{f.tags?.map((t: string) => <span key={t} className="tag" style={{ fontSize: 10.5 }}>{t}</span>)}</div>
+      <div style={{ display: 'grid', gap: 8 }}>
+        {filtered.map((ref: any) => {
+          const tagList = ref.authors ? ref.authors.split(',').filter(Boolean) : [];
+          const link = getLink(ref);
+          const hasPdf = ref.doi && ref.doi.startsWith('/');
+          return (
+            <div key={ref.id} className="card" style={{ padding: 14, cursor: hasPdf ? 'pointer' : 'default' }} onDoubleClick={() => hasPdf && setReadingPdf({ path: ref.doi, title: ref.title })}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 14, fontWeight: 600, color: '#f1f5f9', marginBottom: 6 }}>{ref.title}</div>
+
+                  {/* Tags + Link icons row */}
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, alignItems: 'center' }}>
+                    {tagList.map((t: string) => <span key={t} style={{ background: 'rgba(125,211,252,0.08)', borderRadius: 10, padding: '2px 8px', fontSize: 10, color: '#7dd3fc' }}>{t}</span>)}
+                    {link && <span style={{ background: link.type==='课题'?'rgba(99,179,237,0.08)':'rgba(72,187,120,0.08)', borderRadius: 10, padding: '2px 8px', fontSize: 10, color: link.type==='课题'?'#63b3ed':'#48bb78', cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); if (link.type==='课题') navigateTo('projectDetail',{projectId:link.id}); else navigateTo('experimentDetail',{experimentId:link.id}); }}>{link.type}: {link.name}</span>}
+                    <span style={{ fontSize: 10, color: '#4a5568', cursor: 'pointer', padding: '2px 6px', borderRadius: 10, border: '1px dashed rgba(125,211,252,0.15)', transition: 'all 0.2s' }}
+                      onClick={async (e) => { e.stopPropagation(); const tag = await showPrompt('输入标签'); if (tag) { const newTags = tagList.concat(tag).join(','); await invoke('update_reference', { id: ref.id, title: ref.title, doi: ref.doi||'', authors: newTags, year: ref.year||0, journal: ref.journal||'', coreConclusion: ref.coreConclusion||'', relation: ref.relation||'', notes: ref.notes||'', projectId: ref.projectId||'' }); useStore.getState().loadAll(); } }}
+                      onMouseEnter={e => e.currentTarget.style.borderColor = 'rgba(125,211,252,0.4)'}
+                      onMouseLeave={e => e.currentTarget.style.borderColor = 'rgba(125,211,252,0.15)'}
+                    >+ 标签</span>
+                    {<span style={{ position: 'relative', fontSize: 10, color: '#4a5568', cursor: 'pointer', padding: '2px 6px', borderRadius: 10, border: '1px dashed rgba(99,179,237,0.15)', transition: 'all 0.2s' }}
+                      onClick={(e) => { e.stopPropagation(); setLinkingRef(linkingRef === ref.id + '_p' ? null : ref.id + '_p'); }}
+                      onMouseEnter={e => e.currentTarget.style.color = '#63b3ed'}
+                      onMouseLeave={e => e.currentTarget.style.color = '#4a5568'}
+                    ><FolderOpen size={10} style={{marginRight:2,verticalAlign:'middle'}} />课题
+                      {linkingRef === ref.id + '_p' && (
+                        <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: '#1a1f2e', border: '1px solid rgba(99,179,237,0.15)', borderRadius: 8, padding: 4, minWidth: 160, maxHeight: 180, overflowY: 'auto', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }} onClick={e => e.stopPropagation()}>
+                          {projects.length === 0 && <div style={{ padding: '6px 10px', fontSize: 11, color: '#4a5568' }}>暂无课题</div>}
+                          {projects.map((p: any) => (
+                            <div key={p.id} style={{ padding: '6px 10px', fontSize: 12, color: '#a0aec0', cursor: 'pointer', borderRadius: 4 }}
+                              onMouseEnter={e => e.currentTarget.style.background = 'rgba(99,179,237,0.06)'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                              onClick={async () => { await invoke('update_reference', { id: ref.id, title: ref.title, doi: ref.doi||'', authors: ref.authors||'', year: ref.year||0, journal: 'project:' + p.id, coreConclusion: ref.coreConclusion||'', relation: ref.relation||'', notes: ref.notes||'', projectId: ref.projectId||'' }); setLinkingRef(null); useStore.getState().loadAll(); }}
+                            >{p.name}</div>
+                          ))}
+                        </div>
+                      )}
+                    </span>}
+                    {<span style={{ position: 'relative', fontSize: 10, color: '#4a5568', cursor: 'pointer', padding: '2px 6px', borderRadius: 10, border: '1px dashed rgba(72,187,120,0.15)', transition: 'all 0.2s' }}
+                      onClick={(e) => { e.stopPropagation(); setLinkingRef(linkingRef === ref.id + '_e' ? null : ref.id + '_e'); }}
+                      onMouseEnter={e => e.currentTarget.style.color = '#48bb78'}
+                      onMouseLeave={e => e.currentTarget.style.color = '#4a5568'}
+                    ><FlaskConical size={10} style={{marginRight:2,verticalAlign:'middle'}} />实验
+                      {linkingRef === ref.id + '_e' && (
+                        <div style={{ position: 'absolute', left: 0, top: '100%', marginTop: 4, background: '#1a1f2e', border: '1px solid rgba(72,187,120,0.15)', borderRadius: 8, padding: 4, minWidth: 160, maxHeight: 180, overflowY: 'auto', zIndex: 50, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }} onClick={e => e.stopPropagation()}>
+                          {experiments.length === 0 && <div style={{ padding: '6px 10px', fontSize: 11, color: '#4a5568' }}>暂无实验</div>}
+                          {experiments.map((ex: any) => (
+                            <div key={ex.id} style={{ padding: '6px 10px', fontSize: 12, color: '#a0aec0', cursor: 'pointer', borderRadius: 4 }}
+                              onMouseEnter={e => e.currentTarget.style.background = 'rgba(72,187,120,0.06)'}
+                              onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                              onClick={async () => { await invoke('update_reference', { id: ref.id, title: ref.title, doi: ref.doi||'', authors: ref.authors||'', year: ref.year||0, journal: 'experiment:' + ex.id, coreConclusion: ref.coreConclusion||'', relation: ref.relation||'', notes: ref.notes||'', projectId: ref.projectId||'' }); setLinkingRef(null); useStore.getState().loadAll(); }}
+                            >{ex.title}</div>
+                          ))}
+                        </div>
+                      )}
+                    </span>}
+                  </div>
+
+                  {ref.coreConclusion && <div style={{ fontSize: 11, color: '#4a5568', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{ref.coreConclusion.slice(0, 80)}</div>}
+                </div>
+                <div style={{ width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#4a5568', flexShrink: 0, marginLeft: 8, transition: 'color 0.2s' }} onClick={(e) => { e.stopPropagation(); deleteReference(ref.id); }} onMouseEnter={e => e.currentTarget.style.color = '#fc8181'} onMouseLeave={e => e.currentTarget.style.color = '#4a5568'}><Trash2 size={14} /></div>
               </div>
             </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
+
+      {readingPdf && <PDFReader filePath={readingPdf.path} title={readingPdf.title} onClose={() => setReadingPdf(null)} />}
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// References Page
-// ═══════════════════════════════════════
-function ReferencesPage() {
-  const { references, projects } = useStore();
-  return (
-    <div>
-      <div className="page-header"><h1>文献管理</h1><p>科研相关文献笔记</p></div>
-      {references.map(r => {
-        const proj = projects.find(p => p.id === r.projectId);
-        return (
-          <div key={r.id} className="card">
-            <div className="font-bold" style={{ fontSize: 15, marginBottom: 4, lineHeight: 1.4 }}>{r.title}</div>
-            <div className="text-sm muted mb-2">{r.authors} · <em>{r.journal}</em> ({r.year})</div>
-            <div className="text-sm mb-2"><strong>核心结论：</strong>{r.coreConclusion}</div>
-            <div className="text-sm" style={{ color: '#2563eb' }}><strong>与课题关系：</strong>{r.relation}</div>
-            <div className="meta-row mt-2">{r.doi && <span>DOI: {r.doi}</span>}{proj && <span><FolderOpen size={14} /> {proj.name}</span>}</div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════
-// Templates Page
-// ═══════════════════════════════════════
 function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => void }) {
   const { templates } = useStore();
-  return (
-    <div>
-      <div className="page-header"><h1>实验模板</h1><p>预设的实验记录模板，快速开始</p></div>
-      <div className="grid-3">
-        {templates.map(t => (
-          <div key={t.id} className="card template-card" onClick={() => onSelectTemplate(t)}>
-            <div className="template-icon">{t.icon}</div><div className="template-name">{t.name}</div>
-            <div className="text-sm muted mt-2">点击使用此模板</div>
-          </div>
-        ))}
+  return (<div className="page-container"><div className="page-title mb-3">方法</div><div className="grid-3">{templates.map(t => <div key={t.id} className="card template-card" onClick={() => onSelectTemplate(t)}><div className="template-icon">{t.icon}</div><div className="template-name">{t.name}</div></div>)}</div></div>);
+}
+
+function SettingsPage({ bgEnabled, setBgEnabled }: { bgEnabled: boolean; setBgEnabled: (v: boolean) => void }) {
+  const { currentUser } = useStore();
+  const [showPw, setShowPw] = useState(false);
+  const [pwForm, setPwForm] = useState({ old: '', new1: '', new2: '' });
+  const [pwMsg, setPwMsg] = useState('');
+  const [pwLoading, setPwLoading] = useState(false);
+
+  const changePassword = async () => {
+    if (!pwForm.old || !pwForm.new1) { setPwMsg('请填写所有字段'); return; }
+    if (pwForm.new1 !== pwForm.new2) { setPwMsg('两次密码不一致'); return; }
+    if (pwForm.new1.length < 4) { setPwMsg('新密码至少4位'); return; }
+    setPwLoading(true); setPwMsg('');
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('change_password', { username: currentUser, oldPassword: pwForm.old, newPassword: pwForm.new1 });
+      setPwMsg('密码修改成功'); setPwForm({ old: '', new1: '', new2: '' });
+    } catch (e: any) { setPwMsg('修改失败: ' + e); }
+    finally { setPwLoading(false); }
+  };
+
+  if (showPw) {
+    return (<div className="page-container">
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+        <span style={{ cursor: 'pointer', color: '#90cdf4', fontSize: 18 }} onClick={() => setShowPw(false)}>←</span>
+        <div className="page-title">修改密码</div>
       </div>
+      <div className="card" style={{ maxWidth: 400 }}>
+        <div className="form-group"><label>当前密码</label><input type="password" className="form-input" value={pwForm.old} onChange={e => setPwForm(p => ({...p, old: e.target.value}))} /></div>
+        <div className="form-group"><label>新密码</label><input type="password" className="form-input" value={pwForm.new1} onChange={e => setPwForm(p => ({...p, new1: e.target.value}))} /></div>
+        <div className="form-group"><label>确认新密码</label><input type="password" className="form-input" value={pwForm.new2} onChange={e => setPwForm(p => ({...p, new2: e.target.value}))} onKeyDown={e => e.key === 'Enter' && changePassword()} /></div>
+        {pwMsg && <div style={{ fontSize: 12, marginBottom: 10, color: pwMsg.includes('成功') ? '#48bb78' : '#fc8181' }}>{pwMsg}</div>}
+        <button className="btn primary" onClick={changePassword}>{pwLoading ? '修改中...' : '修改密码'}</button>
+      </div>
+    </div>);
+  }
+
+  return (<div className="page-container">
+    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 20 }}>
+      <span style={{ cursor: 'pointer', color: '#90cdf4', fontSize: 18 }} onClick={() => useStore.getState().navigateTo('dashboard' as any)}>←</span>
+      <div className="page-title">设置</div>
+    </div>
+    <div className="settings-list">
+      <div className="settings-row" onClick={() => { const nv = !bgEnabled; setBgEnabled(nv); localStorage.setItem('biolab-bg', nv ? 'on' : 'off'); }}>
+        <div><div className="settings-label">动态背景</div><div className="settings-desc">细胞、蛋白质、核酸等粒子动画</div></div>
+        <div style={{ width: 44, height: 24, borderRadius: 12, background: bgEnabled ? '#63b3ed' : 'rgba(255,255,255,0.08)', position: 'relative', transition: 'background 0.3s', flexShrink: 0 }}><div style={{ width: 20, height: 20, borderRadius: '50%', background: '#fff', position: 'absolute', top: 2, left: bgEnabled ? 22 : 2, transition: 'left 0.3s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} /></div>
+      </div>
+      <div className="settings-row" onClick={() => setShowPw(true)}>
+        <div><div className="settings-label">修改密码</div><div className="settings-desc">更改登录密码</div></div>
+        <span style={{ color: '#4a5568', fontSize: 18 }}>›</span>
+      </div>
+      <div className="settings-row">
+        <div><div className="settings-label">备份与恢复</div><div className="settings-desc">数据备份</div></div>
+        <span style={{ color: '#4a5568', fontSize: 18 }}>›</span>
+      </div>
+      <div className="settings-row">
+        <div><div className="settings-label">关于</div><div className="settings-desc">Lab Data System v0.2.0</div></div>
+        <span style={{ color: '#4a5568', fontSize: 18 }}>›</span>
+      </div>
+    </div>
+  </div>);
+}
+
+
+function UserMenu({ onSettings, onLogout, userName, avatarUrl, onAvatarChange }: { onSettings: () => void; onLogout: () => void; userName: string; avatarUrl?: string; onAvatarChange?: () => void }) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => { const h = (e: MouseEvent) => { if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false); }; document.addEventListener('mousedown', h); return () => document.removeEventListener('mousedown', h); }, []);
+  return (
+    <div ref={ref} style={{ position: 'relative' }}>
+      <div className="topbar-user" onClick={() => setOpen(!open)}>
+        {avatarUrl ? <img src={avatarUrl} className="avatar-img" alt="" /> : <div className="avatar">{userName?.[0]?.toUpperCase() || "?"}</div>}
+      </div>
+      {open && <div className="user-dropdown">
+        
+        <div className="user-dropdown-item" onClick={() => { if (onAvatarChange) onAvatarChange(); setOpen(false); }}>📷 更换头像</div>
+        <div className="user-dropdown-item" onClick={() => { onSettings(); setOpen(false); }}><Settings size={14} /> 设置</div>
+        <div className="user-dropdown-item danger" onClick={async () => { if (await showConfirm('退出登录？')) { onLogout(); setOpen(false); } }}><LogOut size={14} /> 退出登录</div>
+      </div>}
     </div>
   );
 }
 
-// ═══════════════════════════════════════
-// Settings Page (placeholder)
-// ═══════════════════════════════════════
-function SettingsPage() {
-  return (
-    <div>
-      <div className="page-header"><h1>设置</h1><p>应用设置与数据管理</p></div>
-      <div className="grid-2">
-        <div className="card"><h3 style={{ fontWeight: 600, marginBottom: 12 }}>🔒 安全设置</h3><p className="text-sm muted">启动密码、密钥管理、数据加密</p><button className="btn sm mt-2">管理</button></div>
-        <div className="card"><h3 style={{ fontWeight: 600, marginBottom: 12 }}>💾 备份与恢复</h3><p className="text-sm muted">创建完整备份、从备份恢复</p><button className="btn sm mt-2">备份</button></div>
-        <div className="card"><h3 style={{ fontWeight: 600, marginBottom: 12 }}>🤖 AI 助手</h3><p className="text-sm muted">AI 模型配置（即将推出）</p><button className="btn sm mt-2" disabled>配置</button></div>
-        <div className="card"><h3 style={{ fontWeight: 600, marginBottom: 12 }}>ℹ️ 关于</h3><p className="text-sm muted">BioLab v0.1.0<br/>本地优先 · 隐私安全 · 科研专用</p></div>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════
-// Main App
-// ═══════════════════════════════════════
 export default function App() {
-  const { currentView, searchOpen, setSearchOpen, navigateTo, selectedProjectId } = useStore();
+  const { currentView, searchOpen, setSearchOpen, navigateTo, selectedProjectId, logout, currentUser, projects, experiments } = useStore();
+  const [bgEnabled, setBgEnabled] = useState(() => localStorage.getItem("biolab-bg") !== "off");
+  const [avatarUrl, setAvatarUrl] = useState(() => localStorage.getItem("biolab-avatar") || "");
   const [showNewProject, setShowNewProject] = useState(false);
   const [showTemplateChooser, setShowTemplateChooser] = useState(false);
   const [showNewExperiment, setShowNewExperiment] = useState(false);
   const [selectedTemplate, setSelectedTemplate] = useState<any>(null);
-  const [showNewTask, setShowNewTask] = useState(false);
+  const [showNewReference, setShowNewReference] = useState(false);
+  const [slideDir, setSlideDir] = useState<'left'|'right'|'none'>('none');
+  const prevViewRef = useRef(currentView);
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const h = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true); }
+      if (e.key === 'ArrowLeft' && e.altKey) { e.preventDefault(); const keys = navTabs.map(t => t.key); const ci = keys.indexOf(useStore.getState().currentView); if (ci > 0) navigateTo(keys[ci-1] as any); }
+      if (e.key === 'ArrowRight' && e.altKey) { e.preventDefault(); const keys = navTabs.map(t => t.key); const ci = keys.indexOf(useStore.getState().currentView); if (ci >= 0 && ci < keys.length - 1) navigateTo(keys[ci+1] as any); }
       if (e.key === 'Escape') { setSearchOpen(false); useStore.getState().setSearchQuery(''); }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    window.addEventListener('keydown', h); return () => window.removeEventListener('keydown', h);
   }, [setSearchOpen]);
 
-  const handleSelectTemplate = (t: any) => { setSelectedTemplate(t); setShowTemplateChooser(false); setShowNewExperiment(true); };
-  const startNewExperiment = () => setShowTemplateChooser(true);
+  // Track slide direction based on nav tab index
+  useEffect(() => {
+    const tabKeys = navTabs.map(t => t.key);
+    const prevIdx = tabKeys.indexOf(prevViewRef.current);
+    const curIdx = tabKeys.indexOf(currentView);
+    if (prevIdx >= 0 && curIdx >= 0 && prevIdx !== curIdx) {
+      setSlideDir(curIdx > prevIdx ? 'right' : 'left');
+    } else {
+      setSlideDir('none');
+    }
+    prevViewRef.current = currentView;
+  }, [currentView]);
 
-  const navItems = [
-    { key: 'dashboard', label: '工作台', icon: <Home size={18} /> },
-    { key: 'projects', label: '项目管理', icon: <FolderOpen size={18} /> },
-    { key: 'experiments', label: '实验记录', icon: <FlaskConical size={18} /> },
-    { key: 'files', label: '文件管理', icon: <FileText size={18} /> },
-    { key: 'references', label: '文献管理', icon: <BookOpen size={18} /> },
-    { key: 'templates', label: '实验模板', icon: <LayoutTemplate size={18} /> },
-    { key: 'settings', label: '设置', icon: <Settings size={18} /> },
+  const handleAction = (t: string) => { if (t === 'project') setShowNewProject(true); else if (t === 'experiment') setShowTemplateChooser(true); else if (t === 'reference') setShowNewReference(true); };
+  const handleSelectTemplate = (t: any) => { setSelectedTemplate(t); setShowTemplateChooser(false); setShowNewExperiment(true); };
+
+  // Nav tabs
+  const navTabs = [
+    { key: 'projects', label: '课题', icon: <FolderOpen size={15} /> },
+    { key: 'experiments', label: '实验', icon: <FlaskConical size={15} /> },
+    { key: 'templates', label: '方法', icon: <LayoutTemplate size={15} /> },
+    { key: 'library', label: '文献', icon: <BookOpen size={15} /> },
   ];
 
-  const isActive = (key: string) => currentView === key || (key === 'projects' && currentView === 'projectDetail') || (key === 'experiments' && currentView === 'experimentDetail');
+  const isActive = (k: string) => currentView === k || (k === 'projects' && currentView === 'projectDetail') || (k === 'experiments' && currentView === 'experimentDetail') || (k === 'library' && (currentView === 'library' || currentView === 'files' || currentView === 'references'));
+
+  // Breadcrumb for detail pages
+  const detailCrumbs: { label: string; onClick: () => void }[] = [];
+  if (currentView === 'projectDetail') {
+    const p = projects.find(x => x.id === selectedProjectId);
+    detailCrumbs.push({ label: '课题', onClick: () => navigateTo('projects') });
+    if (p) detailCrumbs.push({ label: p.name, onClick: () => {} });
+  }
+  if (currentView === 'experimentDetail') {
+    const exp = experiments.find(e => e.id === useStore.getState().selectedExperimentId);
+    if (exp) {
+      const proj = projects.find(p => p.id === exp.projectId);
+      if (proj) {
+        detailCrumbs.push({ label: '课题', onClick: () => navigateTo('projects') });
+        detailCrumbs.push({ label: proj.name, onClick: () => navigateTo('projectDetail', { projectId: proj.id }) });
+      }
+      detailCrumbs.push({ label: exp.title, onClick: () => {} });
+    }
+  }
 
   const renderView = () => {
     switch (currentView) {
-      case 'dashboard': return <Dashboard />;
-      case 'projects': return <ProjectsList onNewProject={() => setShowNewProject(true)} />;
-      case 'projectDetail': return <ProjectDetail onNewExperiment={startNewExperiment} />;
-      case 'experiments': return <ExperimentsList onNewExperiment={startNewExperiment} />;
-      case 'experimentDetail': return <ExperimentDetail />;
-      case 'files': return <FilesPage />;
-      case 'references': return <ReferencesPage />;
+      case 'dashboard': return <HomePage onAction={handleAction} />;
+      case 'projects': return <ProjectsPage onAction={handleAction} />;
+      case 'projectDetail': return <ProjectDetailPage onAction={handleAction} />;
+      case 'experiments': return <ExperimentsPage onAction={handleAction} />;
+      case 'experimentDetail': return <ExperimentDetailPage />;
+      case 'results': return <ResultsPage />;
+      case 'library': case 'files': case 'references': return <LibraryPage onAction={handleAction} />;
       case 'templates': return <TemplatesPage onSelectTemplate={handleSelectTemplate} />;
-      case 'settings': return <SettingsPage />;
-      default: return <Dashboard />;
+      case 'settings': return <SettingsPage bgEnabled={bgEnabled} setBgEnabled={setBgEnabled} />;
+      default: return <HomePage onAction={handleAction} />;
     }
   };
 
   return (
-    <div className="app">
-      <div className="sidebar">
-        <div className="sidebar-logo" onClick={() => navigateTo('dashboard')}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2 15c6.667-6 13.333 0 20-6"/><path d="M9 22c1.798-1.998 2.518-3.995 2.807-5.993"/><path d="M15 2c-1.798 1.998-2.518 3.995-2.807 5.993"/></svg>
-          <span>Lab Data System</span>
+    <div className="app"><BioBackground enabled={bgEnabled} />
+      {/* Top bar with nav tabs */}
+      <div className="topbar">
+        <div className="topbar-logo" onClick={() => navigateTo('dashboard')}>
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M2 15c6.667-6 13.333 0 20-6" /><path d="M9 22c1.798-1.998 2.518-3.995 2.807-5.993" /><path d="M15 2c-1.798 1.998-2.518 3.995-2.807 5.993" /></svg>
         </div>
-        <div className="nav-section">
-          {navItems.map(item => (
-            <div key={item.key} className={`nav-item ${isActive(item.key) ? 'active' : ''}`} onClick={() => navigateTo(item.key as any)}>
-              {item.icon}<span>{item.label}</span>
+        <div className="topbar-divider" />
+
+        {/* Nav tabs in topbar */}
+        <div className="topbar-nav">
+          {navTabs.map(t => (
+            <div key={t.key} className={`topbar-tab ${isActive(t.key) ? 'active' : ''}`} onClick={() => navigateTo(t.key as any)}>
+              {t.icon}<span>{t.label}</span>
             </div>
           ))}
         </div>
-        <div className="sidebar-footer">本地存储 · 隐私优先<br />Lab Data System v0.1.0</div>
+
+        <div className="search-trigger" onClick={() => setSearchOpen(true)}><Search size={15} color="#576178" /><span>搜索</span></div>
+                <UserMenu onSettings={() => navigateTo('settings' as any)} onLogout={logout} userName={currentUser} avatarUrl={avatarUrl} onAvatarChange={() => { const inp = document.createElement("input"); inp.type = "file"; inp.accept = "image/*"; inp.onchange = () => { const file = inp.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { const url = reader.result as string; setAvatarUrl(url); localStorage.setItem("biolab-avatar", url); }; reader.readAsDataURL(file); }; inp.click(); }} />
       </div>
-      <div className="main">
-        <div className="topbar">
-          <div className="search-trigger" onClick={() => setSearchOpen(true)}>
-            <Search size={18} color="#9ca3af" /><span>搜索项目、实验、文件...</span><span className="kbd">⌘K</span>
-          </div>
-          <button className="btn primary" onClick={startNewExperiment}><Plus size={16} /> 新建实验</button>
+
+      {/* Sub breadcrumb for detail pages */}
+      {detailCrumbs.length > 0 && (
+        <div className="sub-breadcrumb">
+          {detailCrumbs.map((c, i) => (
+            <span key={i}>
+              {i > 0 && <span className="bc-sep">/</span>}
+              {i < detailCrumbs.length - 1 ? <span className="bc-link" onClick={c.onClick}>{c.label}</span> : <span className="bc-current">{c.label}</span>}
+            </span>
+          ))}
         </div>
-        <div className="content">{renderView()}</div>
-      </div>
+      )}
+
+      <div className="content-area page-fade-in" key={currentView}>{renderView()}</div>
 
       {searchOpen && <SearchOverlay />}
       {showNewProject && <NewProjectModal onClose={() => setShowNewProject(false)} />}
       {showTemplateChooser && <TemplateChooser onSelect={handleSelectTemplate} onClose={() => setShowTemplateChooser(false)} />}
       {showNewExperiment && <NewExperimentModal template={selectedTemplate} onClose={() => { setShowNewExperiment(false); setSelectedTemplate(null); }} defaultProjectId={selectedProjectId || undefined} />}
-      {showNewTask && <NewTaskModal onClose={() => setShowNewTask(false)} defaultProjectId={selectedProjectId || undefined} />}
-    </div>
+      {showNewReference && <NewReferenceModal onClose={() => setShowNewReference(false)} />}
+    <DialogHost /></div>
   );
 }

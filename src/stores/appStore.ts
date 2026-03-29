@@ -31,11 +31,8 @@ function tryParseJson(s: any, fallback: any) {
 }
 
 interface AppState {
-  // Auth
   loggedIn: boolean;
   currentUser: string;
-
-  // Nav
   currentView: ViewName;
   selectedProjectId: string | null;
   selectedExperimentId: string | null;
@@ -43,7 +40,6 @@ interface AppState {
   searchOpen: boolean;
   loading: boolean;
 
-  // Data
   projects: any[];
   experiments: any[];
   results: any[];
@@ -52,50 +48,44 @@ interface AppState {
   references: any[];
   templates: any[];
 
-  // Auth actions
   setLoggedIn: (user: string) => void;
   logout: () => void;
 
-  // Nav actions
   navigateTo: (view: ViewName, opts?: { projectId?: string; experimentId?: string }) => void;
   setSearchOpen: (open: boolean) => void;
   setSearchQuery: (q: string) => void;
 
-  // Data actions
   loadAll: () => Promise<void>;
   addProject: (data: any) => Promise<void>;
   updateProject: (id: string, data: any) => Promise<void>;
   deleteProject: (id: string) => Promise<void>;
   addExperiment: (data: any) => Promise<void>;
+  deleteExperiment: (id: string) => Promise<void>;
   addResult: (data: any) => Promise<void>;
+  deleteResult: (id: string) => Promise<void>;
   addTask: (data: any) => Promise<void>;
   updateTask: (id: string, data: any) => Promise<void>;
   deleteTask: (id: string) => Promise<void>;
   addReference: (data: any) => Promise<void>;
+  deleteReference: (id: string) => Promise<void>;
   searchAll: (query: string) => Promise<any[]>;
 
-  // Helpers
   getProjectExperiments: (pid: string) => any[];
   getProjectResults: (pid: string) => any[];
   getProjectTasks: (pid: string) => any[];
   getProjectRefs: (pid: string) => any[];
+  cloneExperiment: (id: string) => Promise<void>;
   getExperimentResults: (eid: string) => any[];
 }
 
 export const useStore = create<AppState>((set, get) => ({
-  loggedIn: false,
-  currentUser: '',
-  currentView: 'dashboard',
-  selectedProjectId: null,
-  selectedExperimentId: null,
-  searchQuery: '',
-  searchOpen: false,
-  loading: true,
-
+  loggedIn: false, currentUser: '',
+  currentView: 'dashboard', selectedProjectId: null, selectedExperimentId: null,
+  searchQuery: '', searchOpen: false, loading: true,
   projects: [], experiments: [], results: [], files: [], tasks: [], references: [], templates: [],
 
   setLoggedIn: (user) => set({ loggedIn: true, currentUser: user }),
-  logout: () => set({ loggedIn: false, currentUser: '', projects: [], experiments: [], results: [], files: [], tasks: [], references: [] }),
+  logout: () => set({ loggedIn: false, currentUser: '', currentView: 'dashboard', projects: [], experiments: [], results: [], files: [], tasks: [], references: [] }),
 
   navigateTo: (view, opts) => set({
     currentView: view,
@@ -107,59 +97,39 @@ export const useStore = create<AppState>((set, get) => ({
 
   loadAll: async () => {
     try {
-      console.log('[Store] 开始加载数据...');
       const [projects, experiments, results, tasks, refs, files, templates] = await Promise.all([
-        invoke<any[]>('get_projects').catch(e => { console.error('加载项目失败:', e); return []; }),
-        invoke<any[]>('get_experiments').catch(e => { console.error('加载实验失败:', e); return []; }),
-        invoke<any[]>('get_results').catch(e => { console.error('加载结果失败:', e); return []; }),
-        invoke<any[]>('get_tasks').catch(e => { console.error('加载任务失败:', e); return []; }),
-        invoke<any[]>('get_references').catch(e => { console.error('加载文献失败:', e); return []; }),
-        invoke<any[]>('get_files').catch(e => { console.error('加载文件失败:', e); return []; }),
-        invoke<any[]>('get_templates').catch(e => { console.error('加载模板失败:', e); return []; }),
+        invoke<any[]>('get_projects').catch(() => []),
+        invoke<any[]>('get_experiments').catch(() => []),
+        invoke<any[]>('get_results').catch(() => []),
+        invoke<any[]>('get_tasks').catch(() => []),
+        invoke<any[]>('get_references').catch(() => []),
+        invoke<any[]>('get_files').catch(() => []),
+        invoke<any[]>('get_templates').catch(() => []),
       ]);
-      console.log('[Store] 数据加载完成:', projects.length, '项目,', experiments.length, '实验,', templates.length, '模板');
       set({
-        projects: projects.map(mapProject),
-        experiments: experiments.map(mapExperiment),
-        results: results.map(mapResult),
-        tasks: tasks.map(mapTask),
-        references: refs.map(mapReference),
-        files: files.map(mapFile),
-        templates: templates.map(mapTemplate),
-        loading: false,
+        projects: projects.map(mapProject), experiments: experiments.map(mapExperiment),
+        results: results.map(mapResult), tasks: tasks.map(mapTask),
+        references: refs.map(mapReference), files: files.map(mapFile),
+        templates: templates.map(mapTemplate), loading: false,
       });
-    } catch (e) {
-      console.error('[Store] 加载数据总失败:', e);
-      set({ loading: false });
-    }
+    } catch (e) { console.error('加载失败:', e); set({ loading: false }); }
   },
 
   addProject: async (data) => {
     const id = generateId();
     const keywords = Array.isArray(data.keywords) ? data.keywords : (data.keywords || '').split(',').map((s: string) => s.trim()).filter(Boolean);
     try {
-      await invoke('create_project', { data: {
-        id, name: data.name, code: data.code || '', direction: data.direction || '',
-        keywords: JSON.stringify(keywords), description: data.description || '',
-        leader: data.leader || '', start_date: data.startDate || '', end_date: data.endDate || '',
-        status: data.status || '进行中', milestones: data.milestones || '',
-      }});
+      await invoke('create_project', { data: { id, name: data.name, code: data.code || '', direction: data.direction || '', keywords: JSON.stringify(keywords), description: data.description || '', leader: data.leader || '', start_date: data.startDate || '', end_date: data.endDate || '', status: data.status || '进行中', milestones: data.milestones || '' }});
       await get().loadAll();
-    } catch (e: any) { console.error('创建项目失败:', e); alert('创建项目失败: ' + e); }
+    } catch (e: any) { alert('创建项目失败: ' + e); }
   },
 
   updateProject: async (id, data) => {
     const old = get().projects.find((p: any) => p.id === id);
     if (!old) return;
-    const merged = { ...old, ...data };
-    const keywords = Array.isArray(merged.keywords) ? merged.keywords : [];
+    const m = { ...old, ...data };
     try {
-      await invoke('update_project', {
-        id, name: merged.name, code: merged.code, direction: merged.direction,
-        keywords: JSON.stringify(keywords), description: merged.description,
-        leader: merged.leader, startDate: merged.startDate, endDate: merged.endDate,
-        status: merged.status, milestones: merged.milestones,
-      });
+      await invoke('update_project', { id, name: m.name, code: m.code, direction: m.direction, keywords: JSON.stringify(Array.isArray(m.keywords) ? m.keywords : []), description: m.description, leader: m.leader, startDate: m.startDate, endDate: m.endDate, status: m.status, milestones: m.milestones });
       await get().loadAll();
     } catch (e: any) { console.error('更新项目失败:', e); }
   },
@@ -168,79 +138,80 @@ export const useStore = create<AppState>((set, get) => ({
     try {
       await invoke('delete_project', { id });
       await get().loadAll();
-      if (get().selectedProjectId === id) set({ selectedProjectId: null });
-    } catch (e: any) { console.error('删除项目失败:', e); }
+      if (get().selectedProjectId === id) set({ selectedProjectId: null, currentView: 'projects' });
+    } catch (e: any) { alert('删除项目失败: ' + e); }
   },
 
   addExperiment: async (data) => {
     const id = generateId();
     try {
-      await invoke('create_experiment', { data: {
-        id, project_id: data.projectId, title: data.title, type: data.type || '',
-        date: data.date || '', purpose: data.purpose || '', materials: data.materials || '',
-        steps: data.steps || '', parameters: data.parameters || '', results: data.results || '',
-        conclusion: data.conclusion || '', issues: data.issues || '',
-        next_steps: data.nextSteps || '', status: data.status || '待处理',
-      }});
+      await invoke('create_experiment', { data: { id, project_id: data.projectId, title: data.title, type: data.type || '', date: data.date || '', purpose: data.purpose || '', materials: data.materials || '', steps: data.steps || '', parameters: data.parameters || '', results: data.results || '', conclusion: data.conclusion || '', issues: data.issues || '', next_steps: data.nextSteps || '', status: data.status || '待处理' }});
       await get().loadAll();
-    } catch (e: any) { console.error('创建实验失败:', e); alert('创建实验失败: ' + e); }
+    } catch (e: any) { alert('创建实验失败: ' + e); }
+  },
+
+  deleteExperiment: async (id) => {
+    try {
+      await invoke('delete_experiment', { id });
+      await get().loadAll();
+      if (get().selectedExperimentId === id) set({ selectedExperimentId: null, currentView: 'experiments' });
+    } catch (e: any) { alert('删除实验失败: ' + e); }
   },
 
   addResult: async (data) => {
     const id = generateId();
     try {
-      await invoke('create_result', {
-        id, experimentId: data.experimentId, projectId: data.projectId,
-        title: data.title, type: data.type || '', summary: data.summary || '',
-        supportsHypothesis: data.supportsHypothesis || false,
-      });
+      await invoke('create_result', { id, experimentId: data.experimentId, projectId: data.projectId, title: data.title, type: data.type || '文本结论', summary: data.summary || '', supportsHypothesis: data.supportsHypothesis || false });
       await get().loadAll();
-    } catch (e: any) { console.error('创建结果失败:', e); }
+    } catch (e: any) { alert('添加结果失败: ' + e); }
+  },
+
+  deleteResult: async (id) => {
+    try { await invoke('delete_result', { id }); await get().loadAll(); }
+    catch (e: any) { alert('删除结果失败: ' + e); }
   },
 
   addTask: async (data) => {
     const id = generateId();
     try {
-      await invoke('create_task', {
-        id, name: data.name, projectId: data.projectId || '',
-        dueDate: data.dueDate || '', priority: data.priority || '中',
-        status: data.status || '待处理', assignee: data.assignee || '', notes: data.notes || '',
-      });
+      await invoke('create_task', { id, name: data.name, projectId: data.projectId || '', dueDate: data.dueDate || '', priority: data.priority || '中', status: data.status || '待处理', assignee: data.assignee || '', notes: data.notes || '' });
       await get().loadAll();
     } catch (e: any) { console.error('创建任务失败:', e); }
   },
 
   updateTask: async (id, data) => {
-    try {
-      await invoke('update_task', { id, status: data.status });
-      await get().loadAll();
-    } catch (e: any) { console.error('更新任务失败:', e); }
+    try { await invoke('update_task', { id, status: data.status }); await get().loadAll(); }
+    catch (e: any) { console.error('更新任务失败:', e); }
   },
 
   deleteTask: async (id) => {
-    try {
-      await invoke('delete_task', { id });
-      await get().loadAll();
-    } catch (e: any) { console.error('删除任务失败:', e); }
+    try { await invoke('delete_task', { id }); await get().loadAll(); }
+    catch (e: any) { console.error('删除任务失败:', e); }
   },
 
   addReference: async (data) => {
     const id = generateId();
     try {
-      await invoke('create_reference', {
-        id, title: data.title, doi: data.doi || '', authors: data.authors || '',
-        year: data.year || 0, journal: data.journal || '',
-        coreConclusion: data.coreConclusion || '', relation: data.relation || '',
-        notes: data.notes || '', projectId: data.projectId || '',
-      });
+      await invoke('create_reference', { id, title: data.title, doi: data.doi || '', authors: data.authors || '', year: data.year || 0, journal: data.journal || '', coreConclusion: data.coreConclusion || '', relation: data.relation || '', notes: data.notes || '', projectId: data.projectId || '' });
       await get().loadAll();
-    } catch (e: any) { console.error('创建文献失败:', e); }
+    } catch (e: any) { alert('添加文献失败: ' + e); }
+  },
+
+  deleteReference: async (id) => {
+    try { await invoke('delete_reference', { id }); await get().loadAll(); }
+    catch (e: any) { alert('删除文献失败: ' + e); }
   },
 
   searchAll: async (query) => {
     if (!query.trim()) return [];
     try { return await invoke<any[]>('search_all', { query }); }
-    catch (e) { console.error('搜索失败:', e); return []; }
+    catch (e) { return []; }
+  },
+
+  cloneExperiment: async (id) => {
+    const exp = get().experiments.find((e: any) => e.id === id);
+    if (!exp) return;
+    await get().addExperiment({ projectId: exp.projectId, title: exp.title + ' (副本)', type: exp.type, date: new Date().toISOString().slice(0, 10), purpose: exp.purpose, materials: exp.materials, steps: exp.steps, parameters: '', results: '', conclusion: '', issues: '', nextSteps: '', status: '进行中' } as any);
   },
 
   getProjectExperiments: (pid) => get().experiments.filter((e: any) => e.projectId === pid),

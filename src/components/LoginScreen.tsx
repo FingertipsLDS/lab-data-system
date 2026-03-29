@@ -16,9 +16,7 @@ export function LoginScreen({ onLoginSuccess }: Props) {
   const [userList, setUserList] = useState<string[]>([]);
   const [dataDir, setDataDir] = useState('');
 
-  useEffect(() => {
-    checkState();
-  }, []);
+  useEffect(() => { checkState(); }, []);
 
   async function checkState() {
     try {
@@ -29,53 +27,32 @@ export function LoginScreen({ onLoginSuccess }: Props) {
         if (users.length > 0) setUsername(users[0]);
         setMode('login');
       } else {
-        // 首次使用，获取默认数据目录
         const dir = await invoke<string>('get_data_dir');
         setDataDir(dir);
         setMode('register');
       }
-    } catch (e) {
-      console.error('检查状态失败:', e);
-      setMode('register');
-    }
+    } catch (e) { setMode('register'); }
   }
 
   async function handleLogin() {
     if (!username || !password) { setError('请填写用户名和密码'); return; }
-    setLoading(true);
-    setError('');
-    try {
-      await invoke<string>('login_user', { username, password });
-      onLoginSuccess(username);
-    } catch (e: any) {
-      setError(e.toString());
-    } finally {
-      setLoading(false);
-    }
+    setLoading(true); setError('');
+    try { await invoke<string>('login_user', { username, password }); onLoginSuccess(username); }
+    catch (e: any) { setError(e.toString()); }
+    finally { setLoading(false); }
   }
 
   async function handleRegister() {
     if (!username || !password) { setError('请填写用户名和密码'); return; }
     if (password !== confirmPassword) { setError('两次密码不一致'); return; }
     if (password.length < 4) { setError('密码至少4位'); return; }
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     try {
-      await invoke('register_user', {
-        username,
-        password,
-        displayName: displayName || username,
-      });
-      // 如果用户选了自定义目录，保存
-      if (dataDir) {
-        await invoke('set_custom_data_dir', { path: dataDir });
-      }
+      await invoke('register_user', { username, password, displayName: displayName || username });
+      if (dataDir) await invoke('set_custom_data_dir', { path: dataDir });
       onLoginSuccess(username);
-    } catch (e: any) {
-      setError(e.toString());
-    } finally {
-      setLoading(false);
-    }
+    } catch (e: any) { setError(e.toString()); }
+    finally { setLoading(false); }
   }
 
   async function pickDataDir() {
@@ -83,270 +60,67 @@ export function LoginScreen({ onLoginSuccess }: Props) {
       const { open } = await import('@tauri-apps/plugin-dialog');
       const selected = await open({ directory: true, title: '选择数据保存位置' });
       if (selected) setDataDir(selected as string);
-    } catch (e) {
-      console.error('选择目录失败:', e);
-    }
+    } catch (e) { console.error(e); }
   }
 
-  if (mode === 'checking') {
-    return (
-      <div style={styles.container}>
-        <div style={styles.loadingText}>正在初始化...</div>
-      </div>
-    );
-  }
+  if (mode === 'checking') return (
+    <div style={s.container}><div style={{ color: 'rgba(255,255,255,0.3)', fontSize: 13 }}>初始化中...</div></div>
+  );
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        {/* Logo */}
-        <div style={styles.logoSection}>
-          <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#60a5fa" strokeWidth="1.8" strokeLinecap="round">
-            <path d="M2 15c6.667-6 13.333 0 20-6"/><path d="M9 22c1.798-1.998 2.518-3.995 2.807-5.993"/>
-            <path d="M15 2c-1.798 1.998-2.518 3.995-2.807 5.993"/>
-          </svg>
-          <h1 style={styles.title}>Lab Data System</h1>
-          <p style={styles.subtitle}>
-            {mode === 'register' ? '首次使用，请创建你的账号' : '欢迎回来，请登录'}
-          </p>
+    <div style={s.container}>
+      <div style={s.card}>
+        <div style={s.logoSection}>
+          <div style={s.logoIcon}>
+            <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#63b3ed" strokeWidth="1.5" strokeLinecap="round"><path d="M2 15c6.667-6 13.333 0 20-6"/><path d="M9 22c1.798-1.998 2.518-3.995 2.807-5.993"/><path d="M15 2c-1.798 1.998-2.518 3.995-2.807 5.993"/></svg>
+          </div>
+          <h1 style={s.title}>Lab Data System</h1>
+          <p style={s.subtitle}>{mode === 'register' ? '首次使用，创建你的账号' : '欢迎回来'}</p>
         </div>
 
-        {/* 错误提示 */}
-        {error && <div style={styles.error}>{error}</div>}
+        {error && <div style={s.error}>{error}</div>}
 
         {mode === 'register' ? (
-          // ═══ 注册界面 ═══
           <>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>用户名 *</label>
-              <input
-                style={styles.input}
-                value={username}
-                onChange={e => setUsername(e.target.value)}
-                placeholder="请输入用户名"
-                autoFocus
-              />
+            <div style={s.formGroup}><label style={s.label}>用户名</label><input style={s.input} value={username} onChange={e => setUsername(e.target.value)} placeholder="请输入用户名" autoFocus /></div>
+            <div style={s.formGroup}><label style={s.label}>显示名称</label><input style={s.input} value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="可选" /></div>
+            <div style={s.formGroup}><label style={s.label}>密码</label><input type="password" style={s.input} value={password} onChange={e => setPassword(e.target.value)} placeholder="至少4位" /></div>
+            <div style={s.formGroup}><label style={s.label}>确认密码</label><input type="password" style={s.input} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="再次输入" onKeyDown={e => e.key === 'Enter' && handleRegister()} /></div>
+            <div style={s.formGroup}>
+              <label style={s.label}>数据保存位置</label>
+              <div style={{ display: 'flex', gap: 6 }}><input style={{ ...s.input, flex: 1 }} value={dataDir} readOnly /><button style={s.dirBtn} onClick={pickDataDir}>选择</button></div>
             </div>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>显示名称</label>
-              <input
-                style={styles.input}
-                value={displayName}
-                onChange={e => setDisplayName(e.target.value)}
-                placeholder="可选，用于界面显示"
-              />
-            </div>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>密码 *</label>
-              <input
-                type="password"
-                style={styles.input}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="至少4位"
-              />
-            </div>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>确认密码 *</label>
-              <input
-                type="password"
-                style={styles.input}
-                value={confirmPassword}
-                onChange={e => setConfirmPassword(e.target.value)}
-                placeholder="再次输入密码"
-                onKeyDown={e => e.key === 'Enter' && handleRegister()}
-              />
-            </div>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>数据保存位置</label>
-              <div style={styles.dirRow}>
-                <input
-                  style={{ ...styles.input, flex: 1 }}
-                  value={dataDir}
-                  onChange={e => setDataDir(e.target.value)}
-                  
-                />
-                <button style={styles.dirBtn} onClick={pickDataDir}>选择</button>
-              </div>
-              <p style={styles.hint}>你的所有科研数据将保存在此目录</p>
-            </div>
-            <button
-              style={{ ...styles.primaryBtn, opacity: loading ? 0.6 : 1 }}
-              onClick={handleRegister}
-              disabled={loading}
-            >
-              {loading ? '创建中...' : '创建账号并进入'}
-            </button>
+            <button style={{ ...s.primaryBtn, opacity: loading ? 0.6 : 1 }} onClick={handleRegister} disabled={loading}>{loading ? '创建中...' : '创建账号'}</button>
           </>
         ) : (
-          // ═══ 登录界面 ═══
           <>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>用户名</label>
-              {userList.length > 1 ? (
-                <select
-                  style={styles.input}
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                >
-                  {userList.map(u => <option key={u} value={u}>{u}</option>)}
-                </select>
-              ) : (
-                <input
-                  style={styles.input}
-                  value={username}
-                  onChange={e => setUsername(e.target.value)}
-                  autoFocus
-                />
-              )}
+            <div style={s.formGroup}><label style={s.label}>用户名</label>
+              {userList.length > 1 ? <select style={s.input} value={username} onChange={e => setUsername(e.target.value)}>{userList.map(u => <option key={u} value={u}>{u}</option>)}</select> : <input style={s.input} value={username} onChange={e => setUsername(e.target.value)} autoFocus />}
             </div>
-            <div style={styles.formGroup}>
-              <label style={styles.label}>密码</label>
-              <input
-                type="password"
-                style={styles.input}
-                value={password}
-                onChange={e => setPassword(e.target.value)}
-                placeholder="请输入密码"
-                onKeyDown={e => e.key === 'Enter' && handleLogin()}
-              />
-            </div>
-            <button
-              style={{ ...styles.primaryBtn, opacity: loading ? 0.6 : 1 }}
-              onClick={handleLogin}
-              disabled={loading}
-            >
-              {loading ? '登录中...' : '登 录'}
-            </button>
-            <button
-              style={styles.linkBtn}
-              onClick={() => { setMode('register'); setError(''); setPassword(''); setUsername(''); }}
-            >
-              创建新账号
-            </button>
+            <div style={s.formGroup}><label style={s.label}>密码</label><input type="password" style={s.input} value={password} onChange={e => setPassword(e.target.value)} placeholder="请输入密码" onKeyDown={e => e.key === 'Enter' && handleLogin()} /></div>
+            <button style={{ ...s.primaryBtn, opacity: loading ? 0.6 : 1 }} onClick={handleLogin} disabled={loading}>{loading ? '登录中...' : '登 录'}</button>
+            <button style={s.linkBtn} onClick={() => { setMode('register'); setError(''); setPassword(''); setUsername(''); }}>创建新账号</button>
           </>
         )}
       </div>
-
-      <div style={styles.footer}>本地存储 · 隐私优先 · 数据安全</div>
+      <div style={s.footer}>Lab Data System · 本地存储 · 数据安全</div>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    height: '100vh',
-    display: 'flex',
-    flexDirection: 'column',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'linear-gradient(135deg, #0f1419 0%, #1a2332 50%, #0f1419 100%)',
-    fontFamily: "'Noto Sans SC', -apple-system, sans-serif",
-  },
-  loadingText: {
-    color: 'rgba(255,255,255,0.5)',
-    fontSize: 14,
-  },
-  card: {
-    width: 400,
-    background: '#fff',
-    borderRadius: 16,
-    padding: '36px 32px 28px',
-    boxShadow: '0 20px 60px rgba(0,0,0,0.3)',
-  },
-  logoSection: {
-    textAlign: 'center' as const,
-    marginBottom: 28,
-  },
-  title: {
-    fontSize: 22,
-    fontWeight: 800,
-    color: '#111827',
-    marginTop: 12,
-    marginBottom: 4,
-    letterSpacing: '-0.02em',
-  },
-  subtitle: {
-    fontSize: 13.5,
-    color: '#9ca3af',
-  },
-  formGroup: {
-    marginBottom: 16,
-  },
-  label: {
-    display: 'block',
-    fontSize: 13,
-    fontWeight: 600,
-    color: '#374151',
-    marginBottom: 4,
-  },
-  input: {
-    width: '100%',
-    padding: '10px 14px',
-    borderRadius: 8,
-    border: '1px solid #d1d5db',
-    fontSize: 14,
-    fontFamily: 'inherit',
-    outline: 'none',
-    boxSizing: 'border-box' as const,
-    transition: 'border-color 0.15s',
-  },
-  dirRow: {
-    display: 'flex',
-    gap: 8,
-  },
-  dirBtn: {
-    padding: '10px 16px',
-    borderRadius: 8,
-    border: '1px solid #d1d5db',
-    background: '#f9fafb',
-    fontSize: 13,
-    fontWeight: 600,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    whiteSpace: 'nowrap' as const,
-  },
-  hint: {
-    fontSize: 12,
-    color: '#9ca3af',
-    marginTop: 4,
-  },
-  primaryBtn: {
-    width: '100%',
-    padding: '11px 0',
-    borderRadius: 10,
-    border: 'none',
-    background: '#2563eb',
-    color: '#fff',
-    fontSize: 15,
-    fontWeight: 600,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    marginTop: 8,
-  },
-  linkBtn: {
-    width: '100%',
-    padding: '8px 0',
-    background: 'none',
-    border: 'none',
-    color: '#6b7280',
-    fontSize: 13,
-    cursor: 'pointer',
-    fontFamily: 'inherit',
-    marginTop: 8,
-  },
-  error: {
-    background: '#fef2f2',
-    color: '#dc2626',
-    padding: '10px 14px',
-    borderRadius: 8,
-    fontSize: 13,
-    marginBottom: 16,
-    textAlign: 'center' as const,
-  },
-  footer: {
-    marginTop: 24,
-    fontSize: 12,
-    color: 'rgba(255,255,255,0.3)',
-  },
+const s: Record<string, React.CSSProperties> = {
+  container: { height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: '#0b0e14', fontFamily: "'Inter', 'Noto Sans SC', sans-serif" },
+  card: { width: 380, background: '#141820', borderRadius: 10, padding: '28px 26px 22px', border: '1px solid rgba(255,255,255,0.06)', boxShadow: '0 20px 60px rgba(0,0,0,0.5)' },
+  logoSection: { textAlign: 'center' as const, marginBottom: 24 },
+  logoIcon: { width: 48, height: 48, margin: '0 auto 10px', borderRadius: 10, background: 'rgba(99,179,237,0.08)', border: '1px solid rgba(99,179,237,0.15)', display: 'flex', alignItems: 'center', justifyContent: 'center' },
+  title: { fontSize: 18, fontWeight: 700, color: '#e2e8f0', marginBottom: 2, letterSpacing: '-0.01em' },
+  subtitle: { fontSize: 12.5, color: '#5a6478' },
+  formGroup: { marginBottom: 14 },
+  label: { display: 'block', fontSize: 10.5, fontWeight: 600, color: '#5a6478', marginBottom: 3, textTransform: 'uppercase' as const, letterSpacing: '0.06em' },
+  input: { width: '100%', padding: '8px 10px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', fontSize: 13, fontFamily: 'inherit', outline: 'none', background: '#0f1219', color: '#e2e8f0', boxSizing: 'border-box' as const, transition: 'border-color 0.15s', WebkitAppearance: 'none' as const, appearance: 'none' as const },
+  dirBtn: { padding: '8px 14px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.08)', background: '#181d27', fontSize: 12, fontWeight: 500, cursor: 'pointer', fontFamily: 'inherit', color: '#8892a4', whiteSpace: 'nowrap' as const },
+  primaryBtn: { width: '100%', padding: '9px 0', borderRadius: 6, border: 'none', background: '#3a8fd4', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit', marginTop: 4, boxShadow: '0 0 16px rgba(99,179,237,0.15)', transition: 'all 0.15s' },
+  linkBtn: { width: '100%', padding: '6px 0', background: 'none', border: 'none', color: '#5a6478', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit', marginTop: 6 },
+  error: { background: 'rgba(252,129,129,0.08)', color: '#fc8181', padding: '8px 12px', borderRadius: 6, fontSize: 12, marginBottom: 14, textAlign: 'center' as const, border: '1px solid rgba(252,129,129,0.12)' },
+  footer: { marginTop: 20, fontSize: 11, color: 'rgba(255,255,255,0.15)' },
 };

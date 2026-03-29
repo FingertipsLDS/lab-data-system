@@ -17,12 +17,12 @@ export default function AppShell() {
     return (
       <div style={{
         height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontFamily: "'Noto Sans SC', sans-serif", color: '#6b7280',
-        background: '#f8f9fb',
+        fontFamily: "'Inter', 'Noto Sans SC', sans-serif", color: '#5a6478',
+        background: '#0b0e14',
       }}>
         <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: 32, marginBottom: 12 }}>🧬</div>
-          <div>正在加载数据...</div>
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#63b3ed" strokeWidth="1.5" strokeLinecap="round" style={{ marginBottom: 10, filter: 'drop-shadow(0 0 8px rgba(99,179,237,0.3))' }}><path d="M2 15c6.667-6 13.333 0 20-6"/><path d="M9 22c1.798-1.998 2.518-3.995 2.807-5.993"/><path d="M15 2c-1.798 1.998-2.518 3.995-2.807 5.993"/></svg>
+          <div style={{ fontSize: 12 }}>正在加载...</div>
         </div>
       </div>
     );
