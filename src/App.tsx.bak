@@ -72,7 +72,7 @@ function NewButton({ onAction }: { onAction: (t: string) => void }) {
     <div className="new-btn-wrap" ref={ref}>
       <button className="btn primary" onClick={() => setOpen(!open)}><Plus size={14} /> 新建</button>
       {open && <div className="new-dropdown">
-        {[{ k: 'project', icon: <FolderOpen size={15} />, l: '新建课题' }, { k: 'experiment', icon: <FlaskConical size={15} />, l: '新建实验' }, { k: 'template', icon: <LayoutTemplate size={15} />, l: '从模板创建' }, { k: 'reference', icon: <BookOpen size={15} />, l: '添加文献' }].map(i => (
+        {[{ k: 'project', icon: <FolderOpen size={15} />, l: '新建课题' }, { k: 'experiment', icon: <FlaskConical size={15} />, l: '新建实验' }, { k: 'reference', icon: <BookOpen size={15} />, l: '添加文献' }].map(i => (
           <div key={i.k} className="new-dropdown-item" onClick={() => { onAction(i.k); setOpen(false); }}>{i.icon}{i.l}</div>
         ))}
       </div>}
@@ -266,12 +266,10 @@ function DarkDatePicker({ value, onChange }: { value: string; onChange: (v: stri
 
 function NewExperimentModal({ template, onClose, defaultProjectId }: { template: any; onClose: () => void; defaultProjectId?: string }) {
   const { addExperiment, projects } = useStore();
-  const [name, setName] = useState(template?.name || '');
+  const [name, setName] = useState('');
   const [projectId, setProjectId] = useState(defaultProjectId || projects[0]?.id || '');
   const [startDate, setStartDate] = useState(localStorage.getItem('biolab-new-exp-date') || new Date().toISOString().slice(0, 10));
-  const [steps, setSteps] = useState<{day: number; name: string; detail: string}[]>(
-    template?.steps?.length ? template.steps.map((s: any) => ({ day: s.day ?? 0, name: s.name ?? '', detail: s.detail ?? s.description ?? '' })) : [{ day: 0, name: '', detail: '' }]
-  );
+  const [steps, setSteps] = useState<{day: number; name: string; detail: string}[]>([{ day: 0, name: '', detail: '' }]);
   const [aiText, setAiText] = useState('');
   const [aiOpen, setAiOpen] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
@@ -592,26 +590,6 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
           >
             {saving ? '✓ 已创建！返回中...' : '创建实验'}
           </div>
-
-          {/* Save as template */}
-          <div onClick={() => {
-            if (steps.length === 0 || !steps.some(s => s.name.trim())) return;
-            const tplName = name.trim() || '未命名模板';
-            const tpl = { id: 'user-' + Date.now(), name: tplName, icon: '📋', cat: template?.fields?.type || '自定义', desc: steps.filter(s => s.name.trim()).map(s => 'D' + s.day + ' ' + s.name).join(' → '), steps: steps.filter(s => s.name.trim()).map(s => ({ day: s.day, name: s.name, detail: s.detail })) };
-            const saved = JSON.parse(localStorage.getItem('biolab-user-templates') || '[]');
-            saved.push(tpl);
-            localStorage.setItem('biolab-user-templates', JSON.stringify(saved));
-            const btn = document.getElementById('save-tpl-btn');
-            if (btn) { btn.textContent = '✓ 已保存'; btn.style.borderColor = 'rgba(72,187,120,0.4)'; btn.style.color = '#48bb78'; }
-            setTimeout(() => { if (btn) { btn.textContent = '存为模板'; btn.style.borderColor = 'rgba(183,148,244,0.25)'; btn.style.color = '#b794f4'; } }, 1500);
-          }} id="save-tpl-btn" style={{
-            width: '100%', padding: '12px 0', textAlign: 'center', borderRadius: 12,
-            background: 'transparent', border: '1px solid rgba(183,148,244,0.25)',
-            color: '#b794f4', fontSize: 14, fontWeight: 700, cursor: 'pointer', transition: 'all 0.25s', marginTop: 6,
-          }}
-            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(183,148,244,0.08)'; e.currentTarget.style.boxShadow = '0 0 20px rgba(183,148,244,0.08)'; }}
-            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; e.currentTarget.style.boxShadow = 'none'; }}
-          >存为模板</div>
         </div>
       </div>
     </div>
@@ -1009,7 +987,7 @@ function TimerWidget() {
 
 
 function HomePage({ onAction }: { onAction: (t: string) => void }) {
-  const { projects, experiments, navigateTo, deleteExperiment } = useStore();
+  const { projects, experiments, navigateTo } = useStore();
   const [expanded, setExpanded] = useState<string | null>(null);
   const [selectedStep, setSelectedStep] = useState<Record<string, number>>({});
 
@@ -1091,8 +1069,8 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
             border: '1px solid rgba(255,255,255,0.04)',
             overflow: 'hidden', transition: 'all 0.3s, transform 0.25s, box-shadow 0.25s',
           }}
-            onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '1'; }}
-            onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '0'; }}
+            onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; }}
+            onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; }}
           >
             {/* Collapsed card */}
             <div style={{ padding: '16px 20px', cursor: 'pointer' }} onClick={() => setExpanded(isExpanded ? null : e.id)}>
@@ -1105,13 +1083,6 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                   <span style={{ fontSize: 12, color: '#606068', fontVariantNumeric: 'tabular-nums' }}>{remainDays > 0 ? '剩余' + remainDays + '天' : '最后一天'}</span>
-                  <div className="home-exp-del" onClick={async (ev) => { ev.stopPropagation(); if (await showConfirm('删除实验「' + e.title + '」？')) deleteExperiment(e.id); }} style={{
-                    width: 24, height: 24, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    cursor: 'pointer', opacity: 0, transition: 'all 0.2s', color: '#4a5568', flexShrink: 0,
-                  }}
-                    onMouseEnter={ev => { ev.currentTarget.style.color = '#fc8181'; ev.currentTarget.style.background = 'rgba(252,129,129,0.1)'; }}
-                    onMouseLeave={ev => { ev.currentTarget.style.color = '#4a5568'; ev.currentTarget.style.background = 'transparent'; }}
-                  ><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></div>
                   <span style={{ color: '#606068', fontSize: 12, transform: isExpanded ? 'rotate(180deg)' : '', transition: 'transform 0.3s' }}>▼</span>
                 </div>
               </div>
@@ -1697,6 +1668,7 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType }: { timel
 // ═══ Experiments List ═══
 function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
   const { experiments, projects, navigateTo, deleteExperiment } = useStore();
+  const [activeType, setActiveType] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<'title'|'date'>('date');
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -1727,7 +1699,9 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
     typeCounts[t] = (typeCounts[t] || 0) + 1;
   });
 
-  const filtered = experiments;
+  const filtered = activeType
+    ? experiments.filter((e: any) => getExpType(e) === activeType)
+    : experiments;
 
   const sorted = [...filtered].sort((a: any, b: any) => {
     const va = sortKey === 'title' ? a.title : a.date;
@@ -1755,6 +1729,7 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
         <div style={{ display: 'flex', alignItems: 'center', padding: '8px 14px', borderBottom: '1px solid rgba(125,211,252,0.08)', marginBottom: 4 }}>
           <div style={{ flex: 3, fontSize: 12, fontWeight: 600, color: sortKey==='title'?'#7dd3fc':'#718096', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('title')}>实验标题{arrow('title')}</div>
           <div style={{ flex: 1.5, fontSize: 12, fontWeight: 600, color: sortKey==='date'?'#7dd3fc':'#718096', cursor: 'pointer', userSelect: 'none' }} onClick={() => toggleSort('date')}>时间{arrow('date')}</div>
+          <div style={{ flex: 1.5, fontSize: 12, fontWeight: 600, color: '#718096' }}>类型</div>
           <div style={{ flex: 2, fontSize: 12, fontWeight: 600, color: '#718096' }}>所属课题</div>
           <div style={{ width: 28 }} />
         </div>
@@ -1763,6 +1738,7 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
       {/* Experiment rows */}
       {sorted.map((e: any) => {
         const proj = projects.find((p: any) => p.id === e.projectId);
+        const tp = types.find(t => t.key === getExpType(e));
         return (
           <div key={e.id} style={{
             display: 'flex', alignItems: 'center', padding: '10px 14px', cursor: 'pointer',
@@ -1774,6 +1750,9 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
           >
             <div style={{ flex: 3, fontSize: 13, fontWeight: 600, color: '#f1f5f9', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{e.title}</div>
             <div style={{ flex: 1.5, fontSize: 12, color: '#718096' }}>{e.date}</div>
+            <div style={{ flex: 1.5 }}>
+              {tp && <span style={{ fontSize: 10, padding: '2px 8px', borderRadius: 10, background: tp.color + '15', color: tp.color }}>{tp.icon} {tp.key}</span>}
+            </div>
             <div style={{ flex: 2, fontSize: 12, color: '#90cdf4' }}>{proj?.name || '-'}</div>
             <div style={{ width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', color: '#4a5568', flexShrink: 0, transition: 'color 0.2s' }}
               onClick={(ev) => { ev.stopPropagation(); deleteExperiment(e.id); }}
@@ -1905,182 +1884,88 @@ function LibraryPage({ onAction }: { onAction: (t: string) => void }) {
 }
 
 function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => void }) {
-  const [selectedCat, setSelectedCat] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const categories = [
-    { key: '动物实验', icon: '🐭', methods: ['皮下荷瘤模型', '原位荷瘤模型', '药效评价(肿瘤)', 'PK/PD药代动力学', '毒理学评价', '给药方案执行', '活体成像(IVIS)', '生存期观察', '组织取材', '体重监测'] },
-    { key: '细胞实验', icon: '🔬', methods: ['细胞培养与传代', '细胞转染/转导', 'CCK-8增殖检测', 'MTT增殖检测', '细胞凋亡检测', '细胞周期分析', 'Transwell迁移', 'Transwell侵袭', '克隆形成实验', '慢病毒包装', '腺病毒包装', '细胞划痕实验'] },
-    { key: '分子实验', icon: '🧬', methods: ['PCR', 'qPCR/RT-qPCR', '基因克隆', '质粒构建', 'CRISPR基因编辑', 'RNA提取', '逆转录(cDNA)', '核酸电泳', 'Southern blot', 'Northern blot', '基因测序'] },
-    { key: '蛋白实验', icon: '🧪', methods: ['Western blot', '免疫共沉淀(Co-IP)', '蛋白纯化', 'SDS-PAGE电泳', 'ELISA', '质谱分析', 'Pull-down', '蛋白定量(BCA/Bradford)', '2D电泳'] },
-    { key: '免疫染色', icon: '🎨', methods: ['免疫荧光(IF)', '免疫组化(IHC)', 'HE染色', 'Masson染色', 'PAS染色', '油红O染色', 'TUNEL凋亡检测', '多重免疫荧光', '原位杂交(ISH/FISH)'] },
-    { key: '流式检测', icon: '💧', methods: ['表面标记检测', '胞内因子染色', '细胞分选(FACS)', '凋亡检测(Annexin V)', '细胞周期(PI)', 'CFSE增殖检测', 'ELISPOT', '多色流式Panel设计', 'CBA细胞因子检测'] },
-    { key: '组学分析', icon: '📊', methods: ['转录组测序(RNA-seq)', '单细胞测序(scRNA-seq)', '蛋白组学(TMT)', '蛋白组学(Label-free)', '代谢组学', 'ATAC-seq', 'ChIP-seq', '空间转录组', '全外显子测序(WES)', '16S菌群测序'] },
-    { key: '药学实验', icon: '💊', methods: ['IC50药物筛选', '药物联合指数(CI)', '药代动力学(ADME)', '制剂稳定性测试', '纳米粒制备', '脂质体制备', '药物释放曲线', '溶血实验', '药物溶解度测定'] },
-    { key: '病理实验', icon: '🔍', methods: ['组织切片制备', '石蜡包埋', '冰冻切片', 'HE染色', '特殊染色', '病理评分', '组织芯片(TMA)', '透射电镜(TEM)', '扫描电镜(SEM)'] },
-    { key: '生信分析', icon: '💻', methods: ['差异基因分析(DEG)', 'GO富集分析', 'KEGG通路分析', 'GSEA分析', '生存分析(K-M)', '免疫浸润分析', 'WGCNA分析', '突变分析', '分子对接', 'PPI蛋白互作网络', '单细胞分析(Seurat)'] },
+    { key: '动物实验', icon: '🐭', color: '#7dd3fc',
+      methods: ['皮下荷瘤模型', '原位荷瘤模型', '药效评价(肿瘤)', 'PK/PD药代动力学', '毒理学评价', '给药方案执行', '活体成像(IVIS)', '生存期观察', '组织取材', '体重监测'] },
+    { key: '细胞实验', icon: '🔬', color: '#48bb78',
+      methods: ['细胞培养与传代', '细胞转染/转导', 'CCK-8增殖检测', 'MTT增殖检测', '细胞凋亡检测', '细胞周期分析', 'Transwell迁移', 'Transwell侵袭', '克隆形成实验', '慢病毒包装', '腺病毒包装', '细胞划痕实验'] },
+    { key: '分子实验', icon: '🧬', color: '#ed8936',
+      methods: ['PCR', 'qPCR/RT-qPCR', '基因克隆', '质粒构建', 'CRISPR基因编辑', 'RNA提取', '逆转录(cDNA)', '核酸电泳', 'Southern blot', 'Northern blot', '基因测序'] },
+    { key: '蛋白实验', icon: '🧪', color: '#d53f8c',
+      methods: ['Western blot', '免疫共沉淀(Co-IP)', '蛋白纯化', 'SDS-PAGE电泳', 'ELISA', '质谱分析', 'Pull-down', '蛋白定量(BCA/Bradford)', '2D电泳'] },
+    { key: '免疫染色', icon: '🎨', color: '#b794f4',
+      methods: ['免疫荧光(IF)', '免疫组化(IHC)', 'HE染色', 'Masson染色', 'PAS染色', '油红O染色', 'TUNEL凋亡检测', '多重免疫荧光', '原位杂交(ISH/FISH)'] },
+    { key: '流式检测', icon: '💧', color: '#63b3ed',
+      methods: ['表面标记检测', '胞内因子染色', '细胞分选(FACS)', '凋亡检测(Annexin V)', '细胞周期(PI)', 'CFSE增殖检测', 'ELISPOT', '多色流式Panel设计', 'CBA细胞因子检测'] },
+    { key: '组学分析', icon: '📊', color: '#f6ad55',
+      methods: ['转录组测序(RNA-seq)', '单细胞测序(scRNA-seq)', '蛋白组学(TMT)', '蛋白组学(Label-free)', '代谢组学', 'ATAC-seq', 'ChIP-seq', '空间转录组', '全外显子测序(WES)', '16S菌群测序'] },
+    { key: '药学实验', icon: '💊', color: '#fc8181',
+      methods: ['IC50药物筛选', '药物联合指数(CI)', '药代动力学(ADME)', '制剂稳定性测试', '纳米粒制备', '脂质体制备', '药物释放曲线', '溶血实验', '药物溶解度测定'] },
+    { key: '病理实验', icon: '🔍', color: '#4fd1c5',
+      methods: ['组织切片制备', '石蜡包埋', '冰冻切片', 'HE染色', '特殊染色', '病理评分', '组织芯片(TMA)', '透射电镜(TEM)', '扫描电镜(SEM)'] },
+    { key: '生信分析', icon: '💻', color: '#a0aec0',
+      methods: ['差异基因分析(DEG)', 'GO富集分析', 'KEGG通路分析', 'GSEA分析', '生存分析(K-M)', '免疫浸润分析', 'WGCNA分析', '突变分析', '分子对接', 'PPI蛋白互作网络', '单细胞分析(Seurat)'] },
   ];
 
-  const [userTemplates, setUserTemplates] = useState<any[]>(() => {
-    try { return JSON.parse(localStorage.getItem('biolab-user-templates') || '[]'); } catch { return []; }
-  });
-
-  const deleteTemplate = (id: string) => {
-    const updated = userTemplates.filter((t: any) => t.id !== id);
-    setUserTemplates(updated);
-    localStorage.setItem('biolab-user-templates', JSON.stringify(updated));
-  };
-
-
-  // ── Sub-page: category detail ──
-  if (selectedCat) {
-    const cat = categories.find(c => c.key === selectedCat)!;
-    return (
-      <div className="page-container">
-        {/* Back header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, cursor: 'pointer' }} onClick={() => setSelectedCat(null)}>
-          <div style={{
-            width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(125,211,252,0.08)', border: '1px solid rgba(125,211,252,0.15)', transition: 'all 0.2s',
-          }}
-            onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.15)'; }}
-            onMouseLeave={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.08)'; }}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 4l-4 4 4 4" stroke="#7dd3fc" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </div>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#f0f0f2', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 22 }}>{cat.icon}</span> {cat.key}
-            </div>
-            <div style={{ fontSize: 12, color: '#606068' }}>{cat.methods.length} 种实验方法</div>
-          </div>
-        </div>
-
-        {/* Methods grid */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {cat.methods.map((m, mi) => (
-            <div key={mi} style={{
-              padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
-              background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              transition: 'all 0.2s',
-            }}
-              onMouseEnter={ev => {
-                ev.currentTarget.style.background = 'rgba(125,211,252,0.06)';
-                ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.2)';
-                ev.currentTarget.style.boxShadow = '0 0 20px rgba(125,211,252,0.08)';
-                ev.currentTarget.style.transform = 'translateX(4px)';
-              }}
-              onMouseLeave={ev => {
-                ev.currentTarget.style.background = 'rgba(255,255,255,0.02)';
-                ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
-                ev.currentTarget.style.boxShadow = 'none';
-                ev.currentTarget.style.transform = 'translateX(0)';
-              }}
-              onClick={() => onSelectTemplate({ id: cat.key + '-' + mi, name: m, fields: { type: cat.key } })}
-            >
-              <span style={{ fontSize: 14, fontWeight: 500, color: '#e0e0e5' }}>{m}</span>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ opacity: 0.3, flexShrink: 0 }}><path d="M6 4l4 4-4 4" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Main grid view ──
   return (
     <div className="page-container">
-      <div style={{ marginBottom: 20 }}><div className="page-title">方法</div></div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 8, marginBottom: 28 }}>
-        {categories.map((cat, ci) => (
-          <div key={cat.key} onClick={() => setSelectedCat(cat.key)} style={{
-            borderRadius: 14, padding: '20px 8px 16px', textAlign: 'center', cursor: 'pointer',
-            background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
-            transition: 'all 0.35s ease', position: 'relative', overflow: 'hidden',
-          }}
-            onMouseEnter={ev => {
-              ev.currentTarget.style.background = 'rgba(125,211,252,0.06)';
-              ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.25)';
-              ev.currentTarget.style.boxShadow = '0 0 30px rgba(125,211,252,0.12), inset 0 0 30px rgba(125,211,252,0.03)';
-              ev.currentTarget.style.transform = 'translateY(-3px) scale(1.02)';
-            }}
-            onMouseLeave={ev => {
-              ev.currentTarget.style.background = 'rgba(255,255,255,0.02)';
-              ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)';
-              ev.currentTarget.style.boxShadow = 'none';
-              ev.currentTarget.style.transform = 'translateY(0) scale(1)';
-            }}
-          >
-            <div style={{ fontSize: 28, marginBottom: 8, filter: 'saturate(0.85)', transition: 'transform 0.3s' }}>{cat.icon}</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#e0e0e5', marginBottom: 3 }}>{cat.key}</div>
-            <div style={{ fontSize: 11, color: '#505058' }}>{cat.methods.length} 种方法</div>
-          </div>
-        ))}
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <div className="page-title">方法</div>
       </div>
 
-      {/* Literature templates */}
-      <div>
-        <div style={{ fontSize: 13, fontWeight: 600, color: '#808088', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 8, textTransform: 'uppercase', letterSpacing: 1 }}>
-          <span style={{ fontSize: 14 }}>📋</span> 实验模板
-          <span style={{ flex: 1, height: 1, background: 'rgba(255,255,255,0.06)', marginLeft: 4 }}></span>
-        </div>
-        {userTemplates.length === 0 ? (
-          <div style={{ padding: '24px 0', textAlign: 'center', color: '#404048', fontSize: 13 }}>
-            暂无模板 · 在新建实验时点击「存为模板」即可添加
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-            {userTemplates.map((lt: any) => (
-              <div key={lt.id} className="tpl-row" style={{
-                borderRadius: 10, padding: '10px 14px', cursor: 'pointer',
-                background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
-                transition: 'all 0.25s', display: 'flex', alignItems: 'center', gap: 12, position: 'relative',
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+        {categories.map(cat => {
+          const isOpen = expanded === cat.key;
+          return (
+            <div key={cat.key} style={{
+              borderRadius: 12, overflow: 'hidden',
+              background: '#18181b', border: '1px solid ' + (isOpen ? cat.color + '30' : 'rgba(255,255,255,0.04)'),
+              transition: 'all 0.3s',
+            }}>
+              {/* Category header */}
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', cursor: 'pointer',
+                transition: 'background 0.2s',
               }}
-                onMouseEnter={ev => {
-                  ev.currentTarget.style.background = 'rgba(125,211,252,0.05)';
-                  ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.18)';
-                  ev.currentTarget.style.boxShadow = '0 0 20px rgba(125,211,252,0.06)';
-                  const del = ev.currentTarget.querySelector('.tpl-del') as HTMLElement;
-                  if (del) del.style.opacity = '1';
-                }}
-                onMouseLeave={ev => {
-                  ev.currentTarget.style.background = 'rgba(255,255,255,0.02)';
-                  ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
-                  ev.currentTarget.style.boxShadow = 'none';
-                  const del = ev.currentTarget.querySelector('.tpl-del') as HTMLElement;
-                  if (del) del.style.opacity = '0';
-                }}
-                onClick={() => onSelectTemplate({ id: lt.id, name: lt.name, fields: { type: lt.cat }, steps: lt.steps })}
+                onClick={() => setExpanded(isOpen ? null : cat.key)}
+                onMouseEnter={ev => ev.currentTarget.style.background = cat.color + '08'}
+                onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}
               >
-                <span style={{ fontSize: 18 }}>{lt.icon || '📋'}</span>
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 13, fontWeight: 500, color: '#d0d0d5' }}>{lt.name}</div>
-                  <div style={{ fontSize: 11, color: '#505058', marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lt.desc}</div>
+                <span style={{ fontSize: 22 }}>{cat.icon}</span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: '#f0f0f2' }}>{cat.key}</div>
+                  <div style={{ fontSize: 11, color: '#606068' }}>{cat.methods.length} 种实验方法</div>
                 </div>
-                <div style={{ fontSize: 11, color: '#7dd3fc', background: 'rgba(125,211,252,0.08)', padding: '3px 10px', borderRadius: 8, fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0 }}>
-                  {lt.steps?.length || 0} 步骤
-                </div>
-                <div className="tpl-del" onClick={(e) => { e.stopPropagation(); deleteTemplate(lt.id); }} style={{
-                  position: 'absolute', right: -8, top: -8, width: 22, height: 22, borderRadius: '50%',
-                  background: '#1a1a1e', border: '1px solid rgba(228,75,74,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  cursor: 'pointer', opacity: 0, transition: 'all 0.2s', zIndex: 2,
-                }}
-                  onMouseEnter={ev => { ev.currentTarget.style.background = '#E24B4A'; ev.currentTarget.style.borderColor = '#E24B4A'; }}
-                  onMouseLeave={ev => { ev.currentTarget.style.background = '#1a1a1e'; ev.currentTarget.style.borderColor = 'rgba(228,75,74,0.3)'; }}
-                >
-                  <svg width="10" height="10" viewBox="0 0 12 12" fill="none"><path d="M3 3l6 6M9 3l-6 6" stroke="#fff" strokeWidth="1.5" strokeLinecap="round"/></svg>
-                </div>
+                <span style={{ color: '#606068', fontSize: 12, transform: isOpen ? 'rotate(180deg)' : '', transition: 'transform 0.3s' }}>▼</span>
               </div>
-            ))}
-          </div>
-        )}
+
+              {/* Methods list */}
+              {isOpen && (
+                <div style={{ padding: '0 16px 12px', animation: 'fadeIn 0.3s ease' }}>
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                    {cat.methods.map((m, mi) => (
+                      <div key={mi} style={{
+                        padding: '6px 14px', borderRadius: 8, fontSize: 12, cursor: 'pointer',
+                        background: cat.color + '10', border: '1px solid ' + cat.color + '20',
+                        color: cat.color, fontWeight: 500, transition: 'all 0.2s',
+                      }}
+                        onMouseEnter={ev => { ev.currentTarget.style.background = cat.color + '20'; ev.currentTarget.style.transform = 'translateY(-1px)'; }}
+                        onMouseLeave={ev => { ev.currentTarget.style.background = cat.color + '10'; ev.currentTarget.style.transform = 'translateY(0)'; }}
+                        onClick={() => onSelectTemplate({ id: cat.key + '-' + mi, name: m, fields: { type: cat.key } })}
+                      >{m}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
 }
-
-
 
 
 function SettingsPage({ bgEnabled, setBgEnabled }: { bgEnabled: boolean; setBgEnabled: (v: boolean) => void }) {
@@ -2200,7 +2085,7 @@ export default function App() {
     prevViewRef.current = currentView;
   }, [currentView]);
 
-  const handleAction = (t: string) => { if (t === 'project') setShowNewProject(true); else if (t === 'experiment') { setSelectedTemplate(null); setShowNewExperiment(true); } else if (t === 'template') setShowTemplateChooser(true); else if (t === 'reference') setShowNewReference(true); };
+  const handleAction = (t: string) => { if (t === 'project') setShowNewProject(true); else if (t === 'experiment') setShowTemplateChooser(true); else if (t === 'reference') setShowNewReference(true); };
   const handleSelectTemplate = (t: any) => { setSelectedTemplate(t); setShowTemplateChooser(false); setShowNewExperiment(true); };
 
   // Nav tabs
