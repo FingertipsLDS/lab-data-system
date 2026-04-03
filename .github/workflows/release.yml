@@ -45,11 +45,15 @@ jobs:
       - name: Install frontend dependencies
         run: pnpm install
 
+      - name: Write signing key to file
+        shell: bash
+        run: echo "${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}" > /tmp/tauri-signing.key
+
       - name: Build Tauri app
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PATH: /tmp/tauri-signing.key
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ""
         with:
           tagName: ${{ github.ref_name }}
@@ -57,3 +61,8 @@ jobs:
           releaseBody: '新版本已发布，请下载安装。'
           releaseDraft: false
           prerelease: false
+
+      - name: Cleanup signing key
+        if: always()
+        shell: bash
+        run: rm -f /tmp/tauri-signing.key
