@@ -42,7 +42,7 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ1RTkzRkJGNTkzNEQwMDUKUldRRjBEUlp2ei9wUlVUa3FWbzlCUE94aUoyOUZmdFlERXoxTUR3dG1yZWd1SnFJZVBjdXhCV2UK",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEU0RjEzMDVEMjg2NDEzNzAKUldSd0UyUW9YVER4NUMxOFFFbFFESGxHemdSNWVNbE9YOHovZVdrSVcvNkdMMU5Lck5XZU82czEK",
       "endpoints": [
         "https://github.com/FingertipsLDS/lab-data-system/releases/latest/download/latest.json"
       ]
