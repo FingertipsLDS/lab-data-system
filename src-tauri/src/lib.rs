@@ -13,6 +13,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_store::Builder::new().build())
+        .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
@@ -46,7 +47,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::security_commands::has_launch_password, commands::security_commands::verify_launch_password,
             commands::security_commands::set_launch_password, commands::security_commands::clear_launch_password,
-            commands::security_commands::rekey_database, commands::security_commands::store_api_key, commands::security_commands::get_api_key,
+            commands::security_commands::rekey_database, commands::security_commands::store_api_key, commands::security_commands::get_api_key, commands::security_commands::delete_user, 
             commands::migration_commands::get_migration_status, commands::migration_commands::acknowledge_migration_error, commands::migration_commands::dismiss_upgrade_notice,
             commands::backup_commands::create_full_backup, commands::backup_commands::restore_from_backup, commands::backup_commands::auto_backup_if_needed,
             commands::user_commands::check_has_users, commands::user_commands::get_user_list,
@@ -56,7 +57,7 @@ pub fn run() {
             commands::db_commands::get_experiments, commands::db_commands::get_experiments_by_project, commands::db_commands::create_experiment, commands::db_commands::update_experiment, commands::db_commands::delete_experiment,
             commands::db_commands::get_results, commands::db_commands::create_result, commands::db_commands::delete_result,
             commands::db_commands::get_tasks, commands::db_commands::create_task, commands::db_commands::update_task, commands::db_commands::delete_task,
-            commands::db_commands::get_references, commands::db_commands::create_reference, commands::db_commands::ai_parse_experiment, commands::db_commands::delete_reference,
+            commands::db_commands::get_references, commands::db_commands::create_reference, commands::db_commands::ai_parse_experiment, commands::db_commands::update_reference, commands::db_commands::delete_reference,
             commands::db_commands::get_files, commands::db_commands::get_templates, commands::db_commands::search_all,
             commands::file_commands::import_files_to_experiment, commands::file_commands::get_experiment_files,
             commands::file_commands::delete_experiment_file, commands::file_commands::open_file, commands::file_commands::read_file_base64,

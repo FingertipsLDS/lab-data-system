@@ -417,3 +417,13 @@ B16-OVA cells (2×10^5) were implanted s.c. into C57BL/6 mice. On day 5, mice re
 
     Ok(cleaned)
 }
+
+#[tauri::command]
+pub fn update_reference(db: State<DbState>, id: String, title: String, doi: String, authors: String, year: i32, journal: String, core_conclusion: String, relation: String, notes: String, project_id: String) -> Result<(), String> {
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE references_table SET title=?1, doi=?2, authors=?3, year=?4, journal=?5, core_conclusion=?6, relation=?7, notes=?8, project_id=?9 WHERE id=?10",
+        rusqlite::params![title, doi, authors, year, journal, core_conclusion, relation, notes, project_id, id],
+    ).map_err(|e| e.to_string())?;
+    Ok(())
+}

@@ -1,7 +1,7 @@
 {
   "name": "biolab",
   "private": true,
-  "version": "0.4.0",
+  "version": "0.5.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -12,6 +12,7 @@
   "dependencies": {
     "@tauri-apps/api": "^2",
     "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-notification": "^2.3.3",
     "@tauri-apps/plugin-opener": "^2",
     "@tauri-apps/plugin-process": "^2.3.1",
     "@tauri-apps/plugin-updater": "^2.10.0",
@@ -25,6 +26,7 @@
     "@tiptap/starter-kit": "^3.20.5",
     "lucide-react": "^1.7.0",
     "nanoid": "^5.1.7",
+    "pdfjs-dist": "3.11.174",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
     "react-router-dom": "^7.13.2",

@@ -10,9 +10,10 @@ interface Props {
   projectId: string;
   files: any[];
   onFilesChanged: () => void;
+  showConfirm?: (msg: string) => Promise<boolean>;
 }
 
-export function FileUploadZone({ experimentId, projectId, files, onFilesChanged }: Props) {
+export function FileUploadZone({ experimentId, projectId, files, onFilesChanged, showConfirm }: Props) {
   const [uploading, setUploading] = useState(false);
   const [lightbox, setLightbox] = useState<string | null>(null);
   const [imgCache, setImgCache] = useState<Record<string, string>>({});
@@ -98,7 +99,7 @@ export function FileUploadZone({ experimentId, projectId, files, onFilesChanged 
                   <div style={{ width: 50, height: 50, borderRadius: 4, background: 'rgba(255,255,255,0.04)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontSize: 11, color: '#4a5568' }}>加载中</div>
                 )}
                 <div style={{ flex: 1, minWidth: 0, fontSize: 12, color: '#a0aec0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name || f.original_name || f.originalName}</div>
-                <div onClick={() => deleteFile(f.id, f.name)} style={{ padding: '4px 10px', borderRadius: 4, background: 'rgba(252,80,80,0.15)', border: '1px solid rgba(252,80,80,0.25)', color: '#fc8181', fontSize: 11, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>删除</div>
+                <div onClick={async () => { if (showConfirm ? await showConfirm('删除该文件？') : confirm('删除该文件？')) deleteFile(f.id, f.name); }} style={{ padding: '4px 10px', borderRadius: 4, background: 'rgba(252,80,80,0.15)', border: '1px solid rgba(252,80,80,0.25)', color: '#fc8181', fontSize: 11, fontWeight: 600, cursor: 'pointer', flexShrink: 0 }}>删除</div>
               </div>
             );
           })}
@@ -112,7 +113,7 @@ export function FileUploadZone({ experimentId, projectId, files, onFilesChanged 
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 600, color: '#90cdf4', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{f.name}</div>
           </div>
-          <Trash2 size={13} style={{ cursor: 'pointer', color: '#718096', flexShrink: 0 }} onClick={() => deleteFile(f.id, f.name)} />
+          <Trash2 size={13} style={{ cursor: 'pointer', color: '#718096', flexShrink: 0 }} onClick={async () => { if (showConfirm ? await showConfirm('删除该文件？') : confirm('删除该文件？')) deleteFile(f.id, f.name); }} />
         </div>
       ))}
 

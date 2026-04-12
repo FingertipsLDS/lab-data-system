@@ -107,30 +107,23 @@ pub fn get_custom_data_dir(app: tauri::AppHandle) -> Result<Option<String>, Stri
 
 #[tauri::command]
 pub fn change_password(db: State<DbState>, username: String, old_password: String, new_password: String) -> Result<(), String> {
-    // First verify the old password by replicating login logic
-    {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let (stored_hash,): (String,) = conn.query_row(
-            "SELECT password_hash FROM users WHERE username = ?1",
-            rusqlite::params![username],
-            |row| Ok((row.get::<_, String>(0)?,)),
-        ).map_err(|_| "用户不存在".to_string())?;
-        
-        let check = format!("{:x}", md5::compute(old_password.as_bytes()));
-        if check != stored_hash && old_password != stored_hash {
-            return Err("旧密码错误".to_string());
-        }
+    let conn = db.0.lock().map_err(|e| e.to_string())?;
+    let stored_hash: String = conn.query_row(
+        "SELECT password_hash FROM users WHERE username = ?1",
+        rusqlite::params![username],
+        |row| row.get(0),
+    ).map_err(|_| "用户不存在".to_string())?;
+    
+    let valid = bcrypt::verify(&old_password, &stored_hash).unwrap_or(false);
+    if !valid {
+        return Err("旧密码错误".to_string());
     }
     
-    // Update with new password
-    {
-        let conn = db.0.lock().map_err(|e| e.to_string())?;
-        let new_hash = format!("{:x}", md5::compute(new_password.as_bytes()));
-        conn.execute(
-            "UPDATE users SET password_hash = ?1 WHERE username = ?2",
-            rusqlite::params![new_hash, username],
-        ).map_err(|e| e.to_string())?;
-    }
+    let new_hash = bcrypt::hash(&new_password, bcrypt::DEFAULT_COST).map_err(|e| e.to_string())?;
+    conn.execute(
+        "UPDATE users SET password_hash = ?1 WHERE username = ?2",
+        rusqlite::params![new_hash, username],
+    ).map_err(|e| e.to_string())?;
     
     Ok(())
 }

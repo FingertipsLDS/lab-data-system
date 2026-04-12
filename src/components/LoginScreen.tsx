@@ -95,7 +95,23 @@ export function LoginScreen({ onLoginSuccess }: Props) {
         ) : (
           <>
             <div style={s.formGroup}><label style={s.label}>用户名</label>
-              {userList.length > 1 ? <select style={s.input} value={username} onChange={e => setUsername(e.target.value)}>{userList.map(u => <option key={u} value={u}>{u}</option>)}</select> : <input style={s.input} value={username} onChange={e => setUsername(e.target.value)} autoFocus />}
+              {userList.length > 1 ? (
+              <div style={{ position: 'relative' }}>
+                <div onClick={() => { const el = document.getElementById('user-dropdown'); if (el) el.style.display = el.style.display === 'block' ? 'none' : 'block'; }} style={{ ...s.input, cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span>{username}</span>
+                  <span style={{ color: '#7dd3fc', fontSize: 10 }}>▼</span>
+                </div>
+                <div id="user-dropdown" style={{ display: 'none', position: 'absolute', top: '100%', left: 0, right: 0, marginTop: 4, background: '#1a1f2e', border: '1px solid rgba(125,211,252,0.15)', borderRadius: 8, padding: 4, zIndex: 100, boxShadow: '0 8px 24px rgba(0,0,0,0.4)' }}>
+                  {userList.map(u => (
+                    <div key={u} onClick={() => { setUsername(u); const el = document.getElementById('user-dropdown'); if (el) el.style.display = 'none'; }}
+                      style={{ padding: '8px 12px', fontSize: 14, color: u === username ? '#7dd3fc' : '#d0d4dc', cursor: 'pointer', borderRadius: 6, transition: 'background 0.15s', display: 'flex', alignItems: 'center', gap: 6 }}
+                      onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(125,211,252,0.06)'}
+                      onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}
+                    >{u === username && <span style={{ fontSize: 12 }}>✓</span>}{u}</div>
+                  ))}
+                </div>
+              </div>
+            ) : <input style={s.input} value={username} onChange={e => setUsername(e.target.value)} autoFocus />}
             </div>
             <div style={s.formGroup}><label style={s.label}>密码</label><input type="password" style={s.input} value={password} onChange={e => setPassword(e.target.value)} placeholder="请输入密码" onKeyDown={e => e.key === 'Enter' && handleLogin()} /></div>
             <button style={{ ...s.primaryBtn, opacity: loading ? 0.6 : 1 }} onClick={handleLogin} disabled={loading}>{loading ? '登录中...' : '登 录'}</button>
