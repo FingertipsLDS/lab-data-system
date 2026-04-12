@@ -1,6 +1,6 @@
 [package]
 name = "biolab"
-version = "0.5.0"
+version = "0.5.1"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2021"
@@ -28,7 +28,7 @@ tauri-plugin-shell = "2.3.5"
 tauri-plugin-store = "2.4.2"
 tauri-plugin-process = "2.3.1"
 rusqlite = { version = "0.39.0", features = ["bundled"] }
-keyring = "3"
+keyring = "2"
 bcrypt = "0.19.0"
 rand = "0.10.0"
 hex = "0.4.3"

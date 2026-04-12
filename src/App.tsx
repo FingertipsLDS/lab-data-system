@@ -342,12 +342,18 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
 
   const sortedSteps = [...steps].sort((a, b) => a.day - b.day);
 
-  // AI parse (placeholder - can connect to DeepSeek)
+  // AI parse (DeepSeek, key 由用户在设置中填写)
   const doAiParse = async () => {
     if (aiText.trim().length < 10) return;
     setAiLoading(true);
     try {
       const { invoke: inv } = await import('@tauri-apps/api/core');
+      const savedKey: string | null = await inv('get_api_key', { provider: 'deepseek' });
+      if (!savedKey || !savedKey.trim()) {
+        setAiLoading(false);
+        await showAlert('请先在右上角头像菜单 → AI 密钥中配置 DeepSeek API Key');
+        return;
+      }
       const resultJson: string = await inv('ai_parse_experiment', { text: aiText, startDate });
       const result = JSON.parse(resultJson);
 
@@ -390,6 +396,12 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
         await showAlert('未识别出实验步骤，请调整文本后再试');
       }
     } catch (e: any) {
+      const msg = String((e as any)?.message || e || '');
+      if (msg.includes('NO_API_KEY')) {
+        setAiLoading(false);
+        await showAlert('请先在右上角头像菜单 → AI 密钥中配置 DeepSeek API Key');
+        return;
+      }
       console.error('AI parse error:', e);
       await showAlert('解析失败: ' + String(e));
     }
@@ -2990,9 +3002,13 @@ function SettingsPage({ bgEnabled, setBgEnabled }: { bgEnabled: boolean; setBgEn
         <div><div className="settings-label">修改密码</div></div>
         <span style={{ color: '#d0d4dc', fontSize: 18 }}>›</span>
       </div>
+      <div className="settings-row" onClick={() => (window as any).__openApiKeySettings?.('deepseek')}>
+        <div><div className="settings-label">DeepSeek API 密钥</div><div className="settings-desc">AI 解析实验步骤所需</div></div>
+        <span style={{ color: '#d0d4dc', fontSize: 18 }}>›</span>
+      </div>
 
       <div className="settings-row">
-        <div><div className="settings-label">关于</div><div className="settings-desc">Lab Data System v0.4.0</div></div>
+        <div><div className="settings-label">关于</div><div className="settings-desc">Lab Data System v0.5.1</div></div>
         <span style={{ color: '#d0d4dc', fontSize: 18 }}>›</span>
       </div>
       <div className="settings-row" onClick={async () => {
@@ -3011,6 +3027,126 @@ function SettingsPage({ bgEnabled, setBgEnabled }: { bgEnabled: boolean; setBgEn
       </div>
     </div>
   </div>);
+}
+
+
+function ApiKeySettings() {
+  const [open, setOpen] = useState(false);
+  const [provider, setProvider] = useState('deepseek');
+  const [keyVal, setKeyVal] = useState('');
+  const [hasKey, setHasKey] = useState(false);
+  const [show, setShow] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<'ok' | 'fail' | null>(null);
+  const [testMsg, setTestMsg] = useState('');
+
+  useEffect(() => {
+    (window as any).__openApiKeySettings = (p?: string) => {
+      setProvider(p || 'deepseek');
+      setTestResult(null);
+      setTestMsg('');
+      setShow(false);
+      (async () => {
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          const existing: string | null = await invoke('get_api_key', { provider: p || 'deepseek' });
+          if (existing && existing.trim()) {
+            setHasKey(true);
+            setKeyVal('sk-' + '•'.repeat(Math.max(0, existing.length - 6)) + existing.slice(-3));
+          } else {
+            setHasKey(false);
+            setKeyVal('');
+          }
+        } catch { setHasKey(false); setKeyVal(''); }
+        setOpen(true);
+      })();
+    };
+    return () => { delete (window as any).__openApiKeySettings; };
+  }, []);
+
+  const save = async () => {
+    if (!keyVal.trim() || keyVal.includes('•')) { await showAlert('请输入完整的 API 密钥'); return; }
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('store_api_key', { provider, apiKey: keyVal.trim() });
+      setHasKey(true);
+      setTestResult(null);
+      await showAlert('保存成功');
+    } catch (e: any) { await showAlert('保存失败: ' + e); }
+  };
+
+  const testConn = async () => {
+    if (!keyVal.trim() || keyVal.includes('•')) { await showAlert('请先输入密钥'); return; }
+    setTesting(true); setTestResult(null); setTestMsg('');
+    try {
+      const r = await fetch('https://api.deepseek.com/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + keyVal.trim() },
+        body: JSON.stringify({ model: 'deepseek-chat', messages: [{ role: 'user', content: 'hi' }], max_tokens: 1 }),
+      });
+      if (r.ok) { setTestResult('ok'); setTestMsg('连接成功,密钥有效'); }
+      else {
+        const t = await r.text();
+        setTestResult('fail');
+        setTestMsg(`错误 ${r.status}: ${t.slice(0, 120)}`);
+      }
+    } catch (e: any) { setTestResult('fail'); setTestMsg('网络错误: ' + e.message); }
+    setTesting(false);
+  };
+
+  const clearKey = async () => {
+    if (!await showConfirm('确定删除已保存的密钥?')) return;
+    try {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('store_api_key', { provider, apiKey: '' });
+      setHasKey(false); setKeyVal(''); setTestResult(null);
+      await showAlert('已删除');
+    } catch (e: any) { await showAlert('删除失败: ' + e); }
+  };
+
+  if (!open) return null;
+  return createPortal(
+    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', zIndex: 99999, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setOpen(false)}>
+      <div onClick={e => e.stopPropagation()} style={{ background: '#1a1a1f', border: '1px solid rgba(125,211,252,0.2)', borderRadius: 14, padding: 24, width: 480, maxWidth: '90vw', boxShadow: '0 24px 60px rgba(0,0,0,0.6)' }}>
+        <div style={{ fontSize: 17, fontWeight: 600, color: '#f0f0f2', marginBottom: 6 }}>AI 服务密钥</div>
+        <div style={{ fontSize: 12, color: '#8890a0', marginBottom: 18, lineHeight: 1.6 }}>
+          AI 解析功能由 DeepSeek 提供。请在 <span style={{ color: '#7dd3fc', cursor: 'pointer', textDecoration: 'underline' }} onClick={() => { try { (window as any).__TAURI__?.shell?.open?.('https://platform.deepseek.com/api_keys'); } catch {} }}>platform.deepseek.com</span> 申请 API Key 后填入此处。<br/>
+          密钥仅保存在本机钥匙串中,不会上传到任何服务器。
+        </div>
+
+        <div style={{ fontSize: 12, color: '#a0a0a8', marginBottom: 6 }}>DeepSeek API Key {hasKey && <span style={{ color: '#48bb78', marginLeft: 8 }}>● 已保存</span>}</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          <input
+            type={show ? 'text' : 'password'}
+            value={keyVal}
+            onChange={e => { setKeyVal(e.target.value); setTestResult(null); }}
+            onFocus={() => { if (keyVal.includes('•')) setKeyVal(''); }}
+            placeholder="sk-xxxxxxxxxxxxxxxx"
+            style={{ flex: 1, padding: '10px 12px', borderRadius: 8, background: '#222225', border: '1px solid rgba(255,255,255,0.08)', color: '#f0f0f2', fontSize: 13, fontFamily: 'monospace', outline: 'none' }}
+          />
+          <button onClick={() => setShow(!show)} style={{ padding: '0 14px', borderRadius: 8, background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', color: '#a0a0a8', cursor: 'pointer', fontSize: 12 }}>{show ? '隐藏' : '显示'}</button>
+        </div>
+
+        {testResult && (
+          <div style={{ padding: '8px 12px', borderRadius: 8, fontSize: 12, marginBottom: 12, background: testResult === 'ok' ? 'rgba(72,187,120,0.1)' : 'rgba(252,129,129,0.1)', color: testResult === 'ok' ? '#48bb78' : '#fc8181', border: `1px solid ${testResult === 'ok' ? 'rgba(72,187,120,0.3)' : 'rgba(252,129,129,0.3)'}` }}>
+            {testMsg}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', gap: 8, justifyContent: 'space-between', marginTop: 4 }}>
+          <div style={{ display: 'flex', gap: 8 }}>
+            {hasKey && <button onClick={clearKey} style={{ padding: '8px 14px', borderRadius: 8, background: 'transparent', border: '1px solid rgba(252,129,129,0.3)', color: '#fc8181', cursor: 'pointer', fontSize: 12 }}>删除</button>}
+            <button onClick={testConn} disabled={testing} style={{ padding: '8px 14px', borderRadius: 8, background: 'transparent', border: '1px solid rgba(125,211,252,0.3)', color: '#7dd3fc', cursor: testing ? 'default' : 'pointer', fontSize: 12, opacity: testing ? 0.5 : 1 }}>{testing ? '测试中...' : '测试连接'}</button>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button onClick={() => setOpen(false)} style={{ padding: '8px 16px', borderRadius: 8, background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', color: '#d0d4dc', cursor: 'pointer', fontSize: 12 }}>取消</button>
+            <button onClick={save} style={{ padding: '8px 16px', borderRadius: 8, background: 'rgba(125,211,252,0.15)', border: '1px solid rgba(125,211,252,0.4)', color: '#7dd3fc', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}>保存</button>
+          </div>
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
 }
 
 
@@ -3054,6 +3190,7 @@ function UserMenu({ onLogout, userName, avatarUrl, bgEnabled, setBgEnabled }: { 
         <div className="user-dropdown-item" onClick={() => { const inp = document.createElement('input'); inp.type = 'file'; inp.accept = 'image/*'; inp.onchange = () => { const file = inp.files?.[0]; if (!file) return; const reader = new FileReader(); reader.onload = () => { const url = reader.result as string; localStorage.setItem('biolab-avatar', url); window.location.reload(); }; reader.readAsDataURL(file); }; inp.click(); setOpen(false); }}>更换头像</div>
         <div className="user-dropdown-item" onClick={() => { const nv = !bgEnabled; setBgEnabled(nv); localStorage.setItem('biolab-bg', nv ? 'on' : 'off'); }} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}><span>动态背景</span><div style={{ width: 32, height: 18, borderRadius: 9, background: bgEnabled ? '#7dd3fc' : '#3a3a40', position: 'relative', transition: 'background 0.2s', flexShrink: 0 }}><div style={{ position: 'absolute', top: 2, left: bgEnabled ? 16 : 2, width: 14, height: 14, borderRadius: '50%', background: '#fff', transition: 'left 0.2s', boxShadow: '0 1px 3px rgba(0,0,0,0.3)' }} /></div></div>
         <div className="user-dropdown-item" onClick={() => { setShowPwModal(true); setOpen(false); }}>修改密码</div>
+        <div className="user-dropdown-item" onClick={() => { (window as any).__openApiKeySettings?.('deepseek'); setOpen(false); }}>AI 密钥</div>
         <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 6px' }} />
         <div className="user-dropdown-item" onClick={async () => { if (await showConfirm('退出登录？')) { onLogout(); setOpen(false); } }}>退出登录</div>
         <div className="user-dropdown-item" onClick={async () => {
@@ -3064,7 +3201,7 @@ function UserMenu({ onLogout, userName, avatarUrl, bgEnabled, setBgEnabled }: { 
           setOpen(false);
         }}>注销账号</div>
         <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 6px' }} />
-        <div style={{ padding: '6px 14px', fontSize: 11, color: '#606068' }}>v0.4.0</div>
+        <div style={{ padding: '6px 14px', fontSize: 11, color: '#606068' }}>v0.5.1</div>
       </div>}
 
     </div>
@@ -3233,7 +3370,8 @@ export default function App() {
         </div>
 
         <div className="search-trigger" onClick={() => setSearchOpen(true)}><Search size={15} color="#576178" /><span>搜索</span></div>
-                <UserMenu onLogout={logout} userName={currentUser} avatarUrl={avatarUrl} bgEnabled={bgEnabled} setBgEnabled={setBgEnabled} />
+                <ApiKeySettings />
+      <UserMenu onLogout={logout} userName={currentUser} avatarUrl={avatarUrl} bgEnabled={bgEnabled} setBgEnabled={setBgEnabled} />
       </div>
 
       {/* Sub breadcrumb for detail pages */}

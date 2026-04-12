@@ -253,7 +253,15 @@ pub fn search_all(db: State<DbState>, query: String) -> Result<Vec<Row>, String>
 
 #[tauri::command]
 pub async fn ai_parse_experiment(text: String, start_date: String) -> Result<String, String> {
-    let api_key = "sk-47241bcb19fa4761930dc8174b5a1f14";
+    // 从系统 keychain 读取用户自己的 DeepSeek API key
+    let api_key = {
+        let entry = keyring::Entry::new("com.biolab.app", "api_key_deepseek")
+            .map_err(|e| format!("读取密钥失败: {}", e))?;
+        match entry.get_password() {
+            Ok(k) if !k.trim().is_empty() => k,
+            _ => return Err("NO_API_KEY".to_string()),
+        }
+    };
     let model = "deepseek-chat";
 
     let system_prompt = r#"你是一个专业的动物实验方案解析助手，专门帮助生物医学研究人员将实验描述转化为精确的时间轴步骤。
@@ -380,7 +388,7 @@ B16-OVA cells (2×10^5) were implanted s.c. into C57BL/6 mice. On day 5, mice re
             { "role": "user", "content": format!("起始日期: {}\n\n实验描述:\n{}", start_date, text) }
         ],
         "temperature": 0.05,
-        "max_tokens": 4096
+        "max_tokens": 8192
     });
 
     let client = reqwest::Client::new();
@@ -405,6 +413,12 @@ B16-OVA cells (2×10^5) were implanted s.c. into C57BL/6 mice. On day 5, mice re
         .as_str()
         .ok_or("AI返回内容为空")?;
 
+    // 检查 finish_reason: length 表示被 max_tokens 截断
+    let finish_reason = data["choices"][0]["finish_reason"].as_str().unwrap_or("");
+    if finish_reason == "length" {
+        return Err("实验步骤过多,AI 输出被截断。建议拆分成多个实验分别解析,或简化描述后重试。".to_string());
+    }
+
     let cleaned = content
         .replace("```json", "")
         .replace("```", "")
@@ -413,7 +427,7 @@ B16-OVA cells (2×10^5) were implanted s.c. into C57BL/6 mice. On day 5, mice re
 
     // Validate JSON
     serde_json::from_str::<serde_json::Value>(&cleaned)
-        .map_err(|e| format!("AI返回格式错误: {}", e))?;
+        .map_err(|e| format!("AI返回格式错误: {} (内容长度 {})", e, cleaned.len()))?;
 
     Ok(cleaned)
 }
