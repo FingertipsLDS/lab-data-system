@@ -87,7 +87,6 @@ export function PDFReader({ filePath, title, onClose }: Props) {
 
   const zoomIn = () => setScale(s => Math.min(4, s + 0.2));
   const zoomOut = () => setScale(s => Math.max(0.4, s - 0.2));
-  const zoomReset = () => setScale(1.2);
 
   const btn: React.CSSProperties = {
     padding: '6px 10px', borderRadius: 6, cursor: 'pointer',
