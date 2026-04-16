@@ -3446,7 +3446,7 @@ canvas { opacity: 1 !important; }
 }
 .timer-holo-bar-fill {
   position: absolute; left: 0; top: 0; bottom: 0; width: 30%; background: #7dd3fc;
-  animation: timerBarMove 1.5s ease infinite;
+  animation: timerBarMove 1s ease infinite;
 }
 @keyframes timerBarMove { 0% { left: -30%; } 100% { left: 100%; } }
 .timer-holo-btn {

@@ -12,6 +12,52 @@ import './App.css';
 import { BioBackground } from './components/BioBackground';
 
 // ═══ Custom Dialog ═══
+
+// ═══ 倒计时铃声 A1 深空回响(同步呼吸灯 1s 周期,持续 60s)═══
+let _alarmCtx: AudioContext | null = null;
+let _alarmTimeout: any = null;
+function stopAlarm() {
+  if (_alarmCtx) { try { _alarmCtx.close(); } catch {} _alarmCtx = null; }
+  if (_alarmTimeout) { clearTimeout(_alarmTimeout); _alarmTimeout = null; }
+}
+function playAlarm() {
+  stopAlarm();
+  const ctx = new AudioContext();
+  ctx.resume();
+  _alarmCtx = ctx;
+  let t = ctx.currentTime + 0.05;
+  const end = t + 60;
+  while (t < end) {
+    // 三重微失谐正弦波(科幻共振感)
+    for (const f of [659.25, 662, 661]) {
+      const o = ctx.createOscillator(); const g = ctx.createGain();
+      o.connect(g); g.connect(ctx.destination);
+      o.type = 'sine'; o.frequency.value = f;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.09, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.001, t + 0.8);
+      o.start(t); o.stop(t + 0.8);
+    }
+    // 低频底音(165Hz)
+    const sub = ctx.createOscillator(); const gs = ctx.createGain();
+    sub.connect(gs); gs.connect(ctx.destination);
+    sub.type = 'sine'; sub.frequency.value = 165;
+    gs.gain.setValueAtTime(0, t);
+    gs.gain.linearRampToValueAtTime(0.07, t + 0.04);
+    gs.gain.exponentialRampToValueAtTime(0.001, t + 0.7);
+    sub.start(t); sub.stop(t + 0.7);
+    // 高频泛音(1318Hz,清脆点缀)
+    const hi = ctx.createOscillator(); const gh = ctx.createGain();
+    hi.connect(gh); gh.connect(ctx.destination);
+    hi.type = 'sine'; hi.frequency.value = 1318.5;
+    gh.gain.setValueAtTime(0, t);
+    gh.gain.linearRampToValueAtTime(0.02, t + 0.005);
+    gh.gain.exponentialRampToValueAtTime(0.001, t + 0.4);
+    hi.start(t); hi.stop(t + 0.4);
+    t += 1.0;
+  }
+  _alarmTimeout = setTimeout(stopAlarm, 60000);
+}
 let _dialogResolve: ((v: string | boolean | null) => void) | null = null;
 let _setDialog: ((d: any) => void) | null = null;
 
@@ -284,11 +330,40 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
   const modalTitle = expMode === 'future' ? '未来计划' : expMode === 'today' ? '新建实验' : '新建实验';
   const modalTitleColor = expMode === 'future' ? '#34d399' : expMode === 'today' ? '#7dd3fc' : undefined;
   React.useEffect(() => { return () => { localStorage.removeItem('biolab-exp-mode'); }; }, []);
-  const editRaw = typeof window !== 'undefined' ? localStorage.getItem('biolab-edit-exp') : null;
-  const editExp = React.useMemo(() => { try { return editRaw ? JSON.parse(editRaw) : null; } catch { return null; } }, [editRaw]);
+  const [editExp] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    const raw = localStorage.getItem('biolab-edit-exp');
+    localStorage.removeItem('biolab-edit-exp');
+    try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+  });
+  const [editTpl] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    const raw = localStorage.getItem('biolab-edit-tpl');
+    localStorage.removeItem('biolab-edit-tpl');
+    try { return raw ? JSON.parse(raw) : null; } catch { return null; }
+  });
   const editTl = React.useMemo(() => { try { return editExp?.parameters ? JSON.parse(editExp.parameters) : null; } catch { return null; } }, [editExp]);
-  const editSteps = editTl?.milestones?.length ? editTl.milestones.map((m: any) => ({ day: m.day ?? 0, name: m.label ?? m.name ?? '', detail: m.detail ?? '' })) : null;
-  React.useEffect(() => { return () => { localStorage.removeItem('biolab-edit-exp'); }; }, []);
+  const editSteps = React.useMemo(() => {
+    if (!editTl?.milestones?.length) return null;
+    // 检查是否任何一步已有 detail(新格式)
+    const hasNewFormat = editTl.milestones.some((m: any) => m && m.detail);
+    // 老数据回退:从 editExp.steps 文本里按 " - " 切
+    let textDetails: string[] = [];
+    if (!hasNewFormat && editExp?.steps) {
+      textDetails = editExp.steps.split('\n').filter((l: string) => l.trim()).map((line: string) => {
+        const m = line.match(/^D\d+:\s*(.+)$/);
+        if (!m) return '';
+        const rest = m[1].trim();
+        const dashIdx = rest.indexOf(' - ');
+        return dashIdx >= 0 ? rest.slice(dashIdx + 3).trim() : '';
+      });
+    }
+    return editTl.milestones.map((m: any, i: number) => ({
+      day: m.day ?? 0,
+      name: m.label ?? m.name ?? '',
+      detail: m.detail || textDetails[i] || '',
+    }));
+  }, [editTl, editExp]);
   const [name, setName] = useState(editExp?.title || template?.name || '');
   const [projectId, setProjectId] = useState(editExp?.projectId || defaultProjectId || projects[0]?.id || '');
   const [startDate, setStartDate] = useState(editExp?.date || localStorage.getItem('biolab-new-exp-date') || new Date().toISOString().slice(0, 10));
@@ -374,21 +449,11 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
         if (result.experiment_type) {
           localStorage.setItem('biolab-new-exp-type', result.experiment_type);
         }
-        // Merge same-day steps
-        const mergedParsed: typeof parsed = [];
-        for (const s of parsed) {
-          const existing = mergedParsed.find(m => m.day === s.day);
-          if (existing) {
-            existing.name = existing.name + ' + ' + s.name;
-            existing.detail = [existing.detail, s.detail].filter(Boolean).join('; ');
-          } else {
-            mergedParsed.push({ ...s });
-          }
-        }
+        // 不再合并同 day 步骤,保留为多条独立步骤
         if (steps.length === 1 && !steps[0].name) {
-          setSteps(mergedParsed);
+          setSteps(parsed);
         } else {
-          setSteps(prev => [...prev, ...mergedParsed]);
+          setSteps(prev => [...prev, ...parsed]);
         }
         setAiDone(true);
         setTimeout(() => { setAiDone(false); setAiOpen(false); }, 1800);
@@ -427,50 +492,90 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
     }
 
     // Merge same-day steps
-    const merged: typeof steps = [];
-    const sorted0 = [...steps].sort((a, b) => a.day - b.day);
-    for (const s of sorted0) {
-      const existing = merged.find(m => m.day === s.day);
-      if (existing) {
-        existing.name = existing.name + ' + ' + s.name;
-        existing.detail = [existing.detail, s.detail].filter(Boolean).join('; ');
-      } else {
-        merged.push({ ...s });
-      }
-    }
-    const sorted = merged;
+    const sorted = [...steps].filter(s => s.name && s.name.trim()).sort((a, b) => a.day - b.day);
     const maxDay = sorted.length > 0 ? sorted[sorted.length - 1].day + 1 : 1;
-    const milestones = sorted.map(s => ({ day: s.day, label: s.name }));
+    const milestones = sorted.map(s => ({ day: s.day, label: s.name, detail: s.detail || '' }));
     const displayMode = localStorage.getItem('biolab-new-exp-display-mode') || 'timeline';
     const expType = localStorage.getItem('biolab-new-exp-type') || '';
     const params = JSON.stringify({ duration_days: maxDay, milestones, display_mode: displayMode });
     localStorage.removeItem('biolab-new-exp-display-mode');
     localStorage.removeItem('biolab-new-exp-type');
-    const stepsText = sorted.map(s => 'D' + s.day + ': ' + s.name + (s.detail ? ' - ' + s.detail : '')).join('\n');
+    const stepsText = sorted.map(s => 'D' + s.day + ': ' + s.name).join('\n');
 
+    if (saving) { console.log('[doSave] 已在保存中,跳过重复调用'); return; }
     setSaving(true);
-    if (editExp?.id) { try { await deleteExperiment(editExp.id); } catch {} }
-    await addExperiment({
-      projectId: pid,
-      title: name.trim(),
-      type: template?.name || '',
-      date: startDate,
-      purpose: '',
-      materials: '',
-      steps: stepsText,
-      parameters: params,
-      results: '', conclusion: '', issues: '', nextSteps: '',
-      status: '进行中',
-    } as any);
+    console.log('[doSave] editExp =', editExp, 'editTpl =', editTpl);
+    if (editTpl?.id) {
+      // 编辑模板模式: 只更新 localStorage 里的模板,不触碰实验数据库
+      const tplName = name.trim() || editTpl.name || '未命名模板';
+      const updatedTpl = {
+        ...editTpl,
+        name: tplName,
+        cat: template?.fields?.type || editTpl.cat || '自定义',
+        desc: steps.filter(s => s.name.trim()).map(s => 'D' + s.day + ' ' + s.name).join(' → '),
+        steps: steps.filter(s => s.name.trim()).map(s => ({ day: s.day, name: s.name, detail: s.detail })),
+      };
+      const saved = JSON.parse(localStorage.getItem('biolab-user-templates') || '[]');
+      const idx = saved.findIndex((t: any) => t.id === editTpl.id);
+      if (idx >= 0) saved[idx] = updatedTpl; else saved.push(updatedTpl);
+      localStorage.setItem('biolab-user-templates', JSON.stringify(saved));
+      localStorage.removeItem('biolab-new-exp-date');
+      window.dispatchEvent(new Event('biolab-tpl-updated'));
+      setTimeout(() => { setSaving(false); onClose(); }, 600);
+      return;
+    }
+    if (editExp?.id) {
+      const { invoke } = await import('@tauri-apps/api/core');
+      await invoke('update_experiment', {
+        id: editExp.id,
+        title: name.trim(),
+        type: template?.name || editExp.type || '',
+        date: startDate,
+        purpose: editExp.purpose || '',
+        materials: editExp.materials || '',
+        steps: stepsText,
+        parameters: params,
+        results: editExp.results || '',
+        conclusion: editExp.conclusion || '',
+        issues: editExp.issues || '',
+        nextSteps: editExp.nextSteps || '',
+        status: editExp.status || '进行中',
+      });
+      await useStore.getState().loadAll();
+    } else {
+      await addExperiment({
+        projectId: pid,
+        title: name.trim(),
+        type: template?.name || '',
+        date: startDate,
+        purpose: '',
+        materials: '',
+        steps: stepsText,
+        parameters: params,
+        results: '', conclusion: '', issues: '', nextSteps: '',
+        status: '进行中',
+      } as any);
+    }
     localStorage.removeItem('biolab-new-exp-date');
 
-    // Save as template if checked
+    // Save as template if checked (works in both new and edit mode)
     if (saveTpl && steps.length > 0 && steps.some(s => s.name.trim())) {
       const tplName = name.trim() || '未命名模板';
-      const tpl = { id: 'user-' + Date.now(), name: tplName, icon: '📋', cat: template?.fields?.type || '自定义', desc: steps.filter(s => s.name.trim()).map(s => 'D' + s.day + ' ' + s.name).join(' → '), steps: steps.filter(s => s.name.trim()).map(s => ({ day: s.day, name: s.name, detail: s.detail })) };
+      const cleanSteps = steps.filter(s => s.name.trim()).map(s => ({ day: s.day, name: s.name, detail: s.detail }));
+      const desc = cleanSteps.map(s => 'D' + s.day + ' ' + s.name).join(' → ');
       const saved = JSON.parse(localStorage.getItem('biolab-user-templates') || '[]');
-      saved.push(tpl);
+      const isExistingUserTpl = template?.id && String(template.id).startsWith('user-');
+      if (isExistingUserTpl) {
+        // 覆盖原模板
+        const idx = saved.findIndex((t: any) => t.id === template.id);
+        const updated = { id: template.id, name: tplName, icon: '📋', cat: template?.fields?.type || '自定义', desc, steps: cleanSteps };
+        if (idx >= 0) saved[idx] = updated; else saved.push(updated);
+      } else {
+        // 新增模板
+        saved.push({ id: 'user-' + Date.now(), name: tplName, icon: '📋', cat: template?.fields?.type || '自定义', desc, steps: cleanSteps });
+      }
       localStorage.setItem('biolab-user-templates', JSON.stringify(saved));
+      window.dispatchEvent(new Event('biolab-tpl-updated'));
     }
     // Brief success state then close
     setTimeout(() => { setSaving(false); onClose(); }, 800);
@@ -565,10 +670,11 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
               const isLast = si === sortedSteps.length - 1;
               const hasErr = stepErr === origIdx;
 
+              const sameDayAsPrev = si > 0 && sortedSteps[si-1].day === step.day;
               return (
                 <div key={origIdx} style={{ display: 'flex', gap: 0, marginBottom: 0,  }}>
                   {/* Left: timeline node */}
-                  <div style={{ width: 46, display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                  <div style={{ width: 46, display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, visibility: sameDayAsPrev ? 'hidden' : 'visible' }}>
                     <div style={{
                       width: 36, height: 36, borderRadius: '50%', background: 'rgba(125,211,252,0.12)',
                       display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
@@ -628,7 +734,7 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
           </div>
 
           {/* Save as template checkbox - moved above */}
-          <div onClick={() => setSaveTpl(!saveTpl)} style={{
+          {!editTpl && <div onClick={() => setSaveTpl(!saveTpl)} style={{
             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
             padding: '8px 0', cursor: 'pointer', marginBottom: 8,
           }}>
@@ -638,8 +744,8 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
               background: saveTpl ? '#b794f4' : 'transparent',
               transition: 'all 0.2s', fontSize: 10, color: '#fff', flexShrink: 0,
             }}>{saveTpl ? '✓' : ''}</div>
-            <span style={{ fontSize: 12, color: saveTpl ? '#b794f4' : '#d0d4dc', transition: 'color 0.2s' }}>同时存为模板</span>
-          </div>
+            <span style={{ fontSize: 12, color: saveTpl ? '#b794f4' : '#d0d4dc', transition: 'color 0.2s' }}>{template?.id && String(template.id).startsWith('user-') ? '同时更新此模板' : '同时存为模板'}</span>
+          </div>}
 
           {/* Create button - moved to bottom */}
           <div onClick={doSave} style={{
@@ -652,7 +758,7 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
             onMouseEnter={e => { if (!saving) e.currentTarget.style.background = 'rgba(125,211,252,0.2)'; }}
             onMouseLeave={e => { if (!saving) e.currentTarget.style.background = 'rgba(125,211,252,0.12)'; }}
           >
-            {saving ? (saveTpl ? '✓ 已创建 + 已存模板' : '✓ 已创建！返回中...') : '创建实验'}
+            {saving ? ((editExp || editTpl) ? '✓ 已保存!返回中...' : (saveTpl ? '✓ 已创建 + 已存模板' : '✓ 已创建！返回中...')) : ((editExp || editTpl) ? '保存修改' : '创建实验')}
           </div>
         </div>
       </div>
@@ -1037,7 +1143,7 @@ function TimerWidget() {
           setOn(false);
           setTimerDone(true);
           window.dispatchEvent(new CustomEvent('biolab-timer-done'));
-          try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2JkZKOgnBjWVpjcH+MlZaShXhsYl1ib3yIkJGMgHRnXltfanmFjo+LfnJmXVtdZ3WBio2JfHBkXFpbY3F+iY2Jf3RoYF5gZ3R+homHfHFmX11eZHF8homHfHJoYl9hZnJ8hYeEe3FnYV9fY298hIaEenBmYV9fY298hIaDenBnYl9gZHB8hIaDe3FoY2FiZXJ8g4SDe3FpZGJjZnN9g4ODe3JqZWRlZ3R+g4KCenJqZmVmaHV+goKBenNsZ2doant/gYGAeXNtaGhpbHyAgH9+eXRuammpa3x/f358eXVvammqa3x+fn17eHVva2prbHx+fn17eHZwbGtsbX1+fXt5d3JubW5vcX5+fXt5eHNvb3Bxcn5+fXt6eXRxcXJzdH9+fHt7enV0dHV2eH9+fHx8fHd3eHl6e39+fX1+f3t8fX5/gH9/f4CBgoOEhYaGh4iJioqLjI2Oj5CQkZKTk5SVlpaXmJmZmpucnJ2en5+goaGio6SkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29ze3+Dh4uPk5ebn6Onq6+zt7u/w8fLz9PX29/j4+fr7/P3+').play().catch(() => {}); } catch {}
+          try { playAlarm(); } catch {}
           try { isPermissionGranted().then(granted => { if (granted) { sendNotification({ title: 'BioLab', body: '计时结束！' }); } else { requestPermission().then(p => { if (p === 'granted') sendNotification({ title: 'BioLab', body: '计时结束！' }); }); } }); } catch {}
           return 0;
         }
@@ -1105,11 +1211,11 @@ function TimerWidget() {
         <span className="tw-d">{pad((h*3600+m*60+s)%60)}</span>
       </div>
       <div className="tw-acts">
-        <span className="tw-ab" onClick={() => { setTimerDone(false); setTotal(0); setLeft(0); }}>确认</span>
+        <span className="tw-ab" onClick={() => { stopAlarm(); setTimerDone(false); setTotal(0); setLeft(0); }}>确认</span>
       </div>
     </div>
     {createPortal(
-      <div style={{ position: 'fixed', inset: 0, zIndex: 999999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setTimerDone(false)}>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 999999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => { stopAlarm(); setTimerDone(false); }}>
         <div className="timer-holo" onClick={e => e.stopPropagation()}>
           <div className="timer-holo-grid" />
           <div className="timer-holo-hex" style={{ top: 10, right: 20 }} />
@@ -1117,7 +1223,7 @@ function TimerWidget() {
           <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
             <div className="timer-holo-time">00:00:00</div>
             <div className="timer-holo-bar"><div className="timer-holo-bar-fill" /></div>
-            <div className="timer-holo-btn" onClick={() => { setTimerDone(false); setTotal(0); setLeft(0); }}>确认</div>
+            <div className="timer-holo-btn" onClick={() => { stopAlarm(); setTimerDone(false); setTotal(0); setLeft(0); }}>确认</div>
           </div>
         </div>
       </div>,
@@ -1192,8 +1298,16 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
     try { if (exp.parameters) tl = JSON.parse(exp.parameters); } catch {}
     const sortedMs2 = (tl.milestones || []).sort((a: any, b: any) => a.day - b.day);
     const newDay = parseInt(stepEdit.day); if (isNaN(newDay)) { setStepEdit(null); return; }
-    const newMs = sortedMs2.map((m: any, i: number) => i === stepEdit.mi ? { ...m, day: newDay, label: stepEdit.label } : m);
-    const params = JSON.stringify({ ...tl, milestones: newMs });
+    if (!stepEdit.label.trim()) { setStepEdit(null); return; }
+    let newMs;
+    if (stepEdit.mi === -1) {
+      newMs = [...sortedMs2, { day: newDay, label: stepEdit.label.trim() }];
+    } else {
+      newMs = sortedMs2.map((m: any, i: number) => i === stepEdit.mi ? { ...m, day: newDay, label: stepEdit.label.trim() } : m);
+    }
+    newMs.sort((a: any, b: any) => a.day - b.day);
+    const newDuration = Math.max(...newMs.map((m: any) => m.day), 0) + 1;
+    const params = JSON.stringify({ ...tl, milestones: newMs, duration_days: newDuration });
     const { invoke: inv } = await import('@tauri-apps/api/core');
     await inv('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: exp.steps||'', parameters: params, results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' });
     await useStore.getState().loadAll();
@@ -1289,7 +1403,6 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
             </svg>
           </div>
           <div className="tl-label tl-label-today">进行中</div>
-          <div className="tl-sub">{(todayD.getMonth()+1) + '月' + todayD.getDate() + '日'}</div>
         </div>
       {/* Header */}
       <div style={{ display: 'none', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
@@ -1414,7 +1527,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                         background: isT ? color.main : '#3a3a40',
                         boxShadow: isT ? '0 0 6px ' + color.main : 'none',
                       }} />
-                      <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' }}>D{ms.day}</span>
+                      <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', opacity: (mi > 0 && sortedMs[mi-1].day === ms.day) ? 0 : 1 }}>{mi > 0 && sortedMs[mi-1].day === ms.day ? '' : 'D' + ms.day}</span>
                       <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, marginLeft: 4, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
                       <span style={{ fontSize: 11, color: isT ? color.main : '#6a6a72', fontVariantNumeric: 'tabular-nums', marginRight: 70, minWidth: 90, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
                       {isT && <span style={{
@@ -1473,7 +1586,6 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                 </svg>
               </div>
               <div className="tl-label tl-label-planned">未来计划</div>
-              <div className="tl-sub">4月12日 起</div>
             </div>
 
             {futureExps.length === 0 ? (
@@ -1584,7 +1696,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                         background: isT ? color.main : '#3a3a40',
                         boxShadow: isT ? '0 0 6px ' + color.main : 'none',
                       }} />
-                      <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' }}>D{ms.day}</span>
+                      <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', opacity: (mi > 0 && sortedMs[mi-1].day === ms.day) ? 0 : 1 }}>{mi > 0 && sortedMs[mi-1].day === ms.day ? '' : 'D' + ms.day}</span>
                       <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, marginLeft: 4, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
                       <span style={{ fontSize: 11, color: isT ? color.main : '#6a6a72', fontVariantNumeric: 'tabular-nums', marginRight: 70, minWidth: 90, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
                       {isT && <span style={{
@@ -1989,6 +2101,12 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
     );
   }
 
+  // 方案 1: 同一天的步骤聚合到一个时间节点(共用一个圆点和 D 标签,步骤名纵向堆叠)
+  const groupedDays: { day: number; items: any[] }[] = [];
+  for (const ms of milestones) {
+    const g = groupedDays.find(x => x.day === ms.day);
+    if (g) g.items.push(ms); else groupedDays.push({ day: ms.day, items: [ms] });
+  }
   return (
     <div style={{ padding: '16px 18px', borderRadius: 12, background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.04)', marginBottom: 16 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -1998,17 +2116,16 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
       <div style={{ position: 'relative', padding: '0 8px' }}>
         <style>{`@keyframes biolabTlLaserRight { 0%, 10% { left: var(--laser-start, 0%); opacity: 0; width: 120px; } 11% { opacity: 1; } 100% { left: 100%; opacity: 0; width: 40px; } } @keyframes biolabTodayPulse { 0% { box-shadow: 0 0 16px rgba(125,211,252,0.9), 0 0 32px rgba(125,211,252,0.6), 0 0 56px rgba(125,211,252,0.35); transform: translate(-50%, -50%) scale(1); } 25% { box-shadow: 0 0 32px rgba(125,211,252,1), 0 0 64px rgba(125,211,252,0.9), 0 0 110px rgba(125,211,252,0.6); transform: translate(-50%, -50%) scale(1.2); } 100% { box-shadow: 0 0 16px rgba(125,211,252,0.9), 0 0 32px rgba(125,211,252,0.6), 0 0 56px rgba(125,211,252,0.35); transform: translate(-50%, -50%) scale(1); } }`}</style>
         <div style={{ position: 'absolute', top: 60, left: 8, right: 8, height: 2, borderRadius: 1, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', top: -2, height: 6, width: 80, background: 'linear-gradient(90deg, #ffffff, #7dd3fc 30%, transparent)', borderRadius: 3, animation: 'biolabTlLaserRight 1.5s ease-out infinite', filter: 'blur(0.3px)', boxShadow: '0 0 12px rgba(125,211,252,0.9), 0 0 24px rgba(125,211,252,0.5)', pointerEvents: 'none', ['--laser-start' as any]: (() => { const n = milestones.length; if (n === 0) return '0%'; let curIdx = -1; for (let i = 0; i < n; i++) { if (daysPassed >= milestones[i].day) curIdx = i; else break; } if (curIdx < 0) return '0%'; return ((curIdx + 0.5) / n) * 100 + '%'; })() }} />
+          <div style={{ position: 'absolute', top: -2, height: 6, width: 80, background: 'linear-gradient(90deg, #ffffff, #7dd3fc 30%, transparent)', borderRadius: 3, animation: 'biolabTlLaserRight 1.5s ease-out infinite', filter: 'blur(0.3px)', boxShadow: '0 0 12px rgba(125,211,252,0.9), 0 0 24px rgba(125,211,252,0.5)', pointerEvents: 'none', ['--laser-start' as any]: (() => { const n = groupedDays.length; if (n === 0) return '0%'; let curIdx = -1; for (let i = 0; i < n; i++) { if (daysPassed >= groupedDays[i].day) curIdx = i; else break; } if (curIdx < 0) return '0%'; return ((curIdx + 0.5) / n) * 100 + '%'; })() }} />
         </div>
-        <div style={{ position: 'absolute', top: 60, left: 8, height: 2, borderRadius: 1, background: 'linear-gradient(90deg, rgba(125,211,252,0.25), #7dd3fc)', width: (() => { const n = milestones.length; if (n === 0) return '0px'; let curIdx = -1; for (let i = 0; i < n; i++) { if (daysPassed >= milestones[i].day) curIdx = i; else break; } if (curIdx < 0) return '0px'; const pct = (curIdx + 0.5) / n; return 'calc((100% - 16px) * ' + pct + ')'; })(), transition: 'width 0.6s', pointerEvents: 'none' }} />
+        <div style={{ position: 'absolute', top: 60, left: 8, height: 2, borderRadius: 1, background: 'linear-gradient(90deg, rgba(125,211,252,0.25), #7dd3fc)', width: (() => { const n = groupedDays.length; if (n === 0) return '0px'; let curIdx = -1; for (let i = 0; i < n; i++) { if (daysPassed >= groupedDays[i].day) curIdx = i; else break; } if (curIdx < 0) return '0px'; const pct = (curIdx + 0.5) / n; return 'calc((100% - 16px) * ' + pct + ')'; })(), transition: 'width 0.6s', pointerEvents: 'none' }} />
         <div style={{ display: 'flex', justifyContent: 'space-between', position: 'relative' }}>
-          {milestones.map((ms: any, mi: number) => {
-            const isDone = daysPassed >= ms.day;
-            const isToday = daysPassed === ms.day;
-            const isFuture = daysPassed < ms.day;
+          {groupedDays.map((g: any, gi: number) => {
+            const isDone = daysPassed >= g.day;
+            const isToday = daysPassed === g.day;
             return (
-              <div key={mi} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0, flex: 1, position: 'relative' }}>
-{(() => { const nd = new Date((startDate || '2026-01-01') + 'T00:00:00'); nd.setDate(nd.getDate() + ms.day); const wd = ['日','一','二','三','四','五','六'][nd.getDay()]; const c = isToday ? '#7dd3fc' : isDone ? 'rgba(125,211,252,0.7)' : '#d0d4dc'; return (<>
+              <div key={gi} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', minWidth: 0, flex: 1, position: 'relative' }}>
+{(() => { const nd = new Date((startDate || '2026-01-01') + 'T00:00:00'); nd.setDate(nd.getDate() + g.day); const wd = ['日','一','二','三','四','五','六'][nd.getDay()]; const c = isToday ? '#7dd3fc' : isDone ? 'rgba(125,211,252,0.7)' : '#d0d4dc'; return (<>
                 <span style={{ fontSize: 13, color: c, opacity: 1, fontWeight: 700, marginBottom: 2 }}>{nd.getMonth()+1}/{nd.getDate()}</span>
                 <span style={{ fontSize: 13, color: c, opacity: 1, fontWeight: 700, marginBottom: 28 }}>周{wd}</span>
                 </>); })()}
@@ -2021,10 +2138,14 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
                   transition: 'all 0.3s', zIndex: 10,
                 }} />
                 <div style={{ height: 18 }} />
-                                <span style={{ fontSize: 11, marginTop: 10, fontVariantNumeric: 'tabular-nums', color: isToday ? '#7dd3fc' : isDone ? 'rgba(125,211,252,0.7)' : '#a0a0a8', fontWeight: 700, padding: '3px 10px', borderRadius: 6, border: '1px solid ' + (isToday ? '#7dd3fc' : isDone ? 'rgba(125,211,252,0.35)' : 'rgba(255,255,255,0.12)'), background: isToday ? 'rgba(125,211,252,0.12)' : isDone ? 'rgba(125,211,252,0.06)' : 'rgba(255,255,255,0.02)' }}>D{ms.day}</span>
-                <span style={{ fontSize: 14, textAlign: 'center', lineHeight: 1.3, marginTop: 6, color: isToday ? '#f0f0f2' : '#d0d4dc', fontWeight: isToday ? 600 : 500, maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', position: 'relative' }}
-                  onMouseEnter={(ev: any) => { ev.currentTarget.style.overflow = 'visible'; ev.currentTarget.style.maxWidth = 'none'; ev.currentTarget.style.background = 'rgba(20,24,34,0.95)'; ev.currentTarget.style.borderRadius = '4px'; ev.currentTarget.style.zIndex = '10'; }}
-                  onMouseLeave={(ev: any) => { ev.currentTarget.style.overflow = 'hidden'; ev.currentTarget.style.maxWidth = '64px'; ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.zIndex = '0'; }}>{ms.label}</span>
+                <span style={{ fontSize: 11, marginTop: 10, fontVariantNumeric: 'tabular-nums', color: isToday ? '#7dd3fc' : isDone ? 'rgba(125,211,252,0.7)' : '#a0a0a8', fontWeight: 700, padding: '3px 10px', borderRadius: 6, border: '1px solid ' + (isToday ? '#7dd3fc' : isDone ? 'rgba(125,211,252,0.35)' : 'rgba(255,255,255,0.12)'), background: isToday ? 'rgba(125,211,252,0.12)' : isDone ? 'rgba(125,211,252,0.06)' : 'rgba(255,255,255,0.02)' }}>D{g.day}</span>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2, marginTop: 6, width: '100%' }}>
+                  {g.items.map((ms: any, idx: number) => (
+                    <span key={idx} style={{ fontSize: 14, textAlign: 'center', lineHeight: 1.3, color: isToday ? '#f0f0f2' : '#d0d4dc', fontWeight: isToday ? 600 : 500, maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', position: 'relative' }}
+                      onMouseEnter={(ev: any) => { ev.currentTarget.style.overflow = 'visible'; ev.currentTarget.style.maxWidth = 'none'; ev.currentTarget.style.background = 'rgba(20,24,34,0.95)'; ev.currentTarget.style.borderRadius = '4px'; ev.currentTarget.style.zIndex = '10'; ev.currentTarget.style.padding = '0 4px'; }}
+                      onMouseLeave={(ev: any) => { ev.currentTarget.style.overflow = 'hidden'; ev.currentTarget.style.maxWidth = '70px'; ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.zIndex = '0'; ev.currentTarget.style.padding = '0'; }}>{ms.label}</span>
+                  ))}
+                </div>
               </div>
             );
           })}
@@ -2049,6 +2170,67 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
   const [refLinkedMsg, setRefLinkedMsg] = useState<string | null>(null);
   const [editingTimeline, setEditingTimeline] = useState(false);
   const exp = experiments.find(e => e.id === selectedExperimentId);
+  const parseSteps = (text: string) => {
+    if (!text) return [] as {day:number;name:string;detail:string}[];
+    // detail 优先从 parameters.milestones[].detail 读取(新数据);老数据回退到从"-"切分
+    let detailMap: Record<number, string> = {};
+    let hasNewFormat = false;
+    try {
+      const tl = JSON.parse(exp?.parameters || '{}');
+      (tl.milestones || []).forEach((m: any, i: number) => {
+        if (m && m.detail) { detailMap[i] = m.detail; hasNewFormat = true; }
+      });
+    } catch {}
+    return text.split('\n').filter(l => l.trim()).map((line, i) => {
+      const m = line.match(/^D(-?\d+):\s*(.+)$/);
+      if (m) {
+        const rest = m[2].trim();
+        if (hasNewFormat || !rest.includes(' - ')) {
+          return { day: parseInt(m[1]), name: rest, detail: detailMap[i] || '' };
+        }
+        // 老数据回退: 第一个 " - " 之前是 name,之后是 detail
+        const dashIdx = rest.indexOf(' - ');
+        return { day: parseInt(m[1]), name: rest.slice(0, dashIdx).trim(), detail: rest.slice(dashIdx + 3).trim() };
+      }
+      return { day: 0, name: line, detail: detailMap[i] || '' };
+    });
+  };
+  const stepsList = React.useMemo(() => parseSteps(exp?.steps || ''), [exp?.steps]);
+  const [editingStep, setEditingStep] = useState<{si:number; field:'day'|'name'|'detail'; val:string}|null>(null);
+  const commitEditingStep = () => {
+    if (!editingStep) return;
+    const { si, field, val } = editingStep;
+    const ns = [...stepsList];
+    if (!ns[si]) { setEditingStep(null); return; }
+    if (field === 'day') {
+      const d = parseInt(val);
+      if (isNaN(d)) { setEditingStep(null); return; }
+      ns[si] = { ...ns[si], day: d };
+      ns.sort((a, b) => a.day - b.day);
+    } else if (field === 'name') {
+      if (!val.trim()) { setEditingStep(null); return; }
+      ns[si] = { ...ns[si], name: val.trim() };
+    } else {
+      ns[si] = { ...ns[si], detail: val };
+    }
+    saveSteps(ns);
+    setEditingStep(null);
+  };
+  const saveSteps = async (newSteps: any[]) => {
+    if (!exp) return;
+    const stepsText = newSteps.map(s => 'D' + s.day + ': ' + s.name).join('\n');
+    const milestones = newSteps.map(s => ({ day: s.day, label: s.name, detail: s.detail || '' }));
+    let tl: any = {}; try { tl = JSON.parse(exp.parameters || '{}'); } catch {}
+    tl.milestones = milestones;
+    tl.duration_days = Math.max(...milestones.map((m: any) => m.day), 0) + 1;
+    const params = JSON.stringify(tl);
+    try {
+      const { invoke: inv } = await import('@tauri-apps/api/core');
+      await inv('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: stepsText, parameters: params, results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' });
+      await useStore.getState().loadAll();
+    } catch(e) { console.error('saveSteps failed:', e); }
+  };
+
   const expRefIds: string[] = (() => { try { const tl = exp ? JSON.parse(exp.parameters || '{}') : {}; return tl.linkedRefs || []; } catch { return []; } })();
   const excludedRefIds: string[] = (() => { try { const tl = exp ? JSON.parse(exp.parameters || '{}') : {}; return tl.excludedRefs || []; } catch { return []; } })();
   const expRefs = references.filter((r: any) => exp && !excludedRefIds.includes(r.id) && expRefIds.includes(r.id));
@@ -2204,48 +2386,51 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
           {activeSec && (
             <div className="exp-section-card active-section">
               {activeSec.key === 'steps' ? (() => {
-                const parseSteps = (text: string) => {
-                  if (!text) return [];
-                  return text.split('\n').filter(Boolean).map(line => {
-                    const m = line.match(/^D(-?\d+):\s*(.+?)(?:\s*-\s*(.+))?$/);
-                    if (m) return { day: parseInt(m[1]), name: m[2].trim(), detail: m[3]?.trim() || '' };
-                    return { day: 0, name: line, detail: '' };
-                  });
-                };
-                const stepsList = parseSteps(exp.steps || '');
-                const saveSteps = async (newSteps: any[]) => {
-                  const stepsText = newSteps.map(s => 'D' + s.day + ': ' + s.name + (s.detail ? ' - ' + s.detail : '')).join('\n');
-                  const milestones = newSteps.map(s => ({ day: s.day, label: s.name }));
-                  let tl: any = {}; try { tl = JSON.parse(exp.parameters || '{}'); } catch {}
-                  tl.milestones = milestones;
-                  tl.duration_days = Math.max(...milestones.map((m: any) => m.day), 0) + 1;
-                  const params = JSON.stringify(tl);
-                  try {
-                    const { invoke: inv } = await import('@tauri-apps/api/core');
-                    await inv('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: stepsText, parameters: params, results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' });
-                    await useStore.getState().loadAll();
-                  } catch(e) { console.error(e); }
-                };
                 return (
                   <div>
                     {stepsList.map((step, si) => (
                       <div key={si} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 0', borderBottom: si < stepsList.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none' }}>
-                        <span style={{ fontSize: 12, color: '#7dd3fc', minWidth: 36, fontVariantNumeric: 'tabular-nums', cursor: 'pointer', padding: '4px 6px', borderRadius: 4, transition: 'all 0.15s', fontWeight: 600 }}
-                          onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.08)'; ev.currentTarget.style.textDecoration = 'underline'; }}
-                          onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.textDecoration = 'none'; }}
-                          onClick={async () => { const v = await showPrompt('修改天数 (D' + step.day + ')', String(step.day)); if (v === null) return; const d = parseInt(v); if (isNaN(d)) return; const ns = [...stepsList]; ns[si] = {...ns[si], day: d}; ns.sort((a,b) => a.day - b.day); saveSteps(ns); }}
-                        >D{step.day}</span>
-                        <div style={{ flex: 1 }}>
-                          <div style={{ fontSize: 13, color: '#f0f0f2', cursor: 'pointer', padding: '2px 6px', borderRadius: 4, transition: 'all 0.15s', fontWeight: 500 }}
-                            onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(255,255,255,0.03)'; ev.currentTarget.style.textDecoration = 'underline dashed rgba(255,255,255,0.2)'; }}
+                        {editingStep && editingStep.si === si && editingStep.field === 'day' ? (
+                          <span style={{ minWidth: 36, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                            <span style={{ color: '#7dd3fc', fontSize: 12, fontWeight: 600 }}>D</span>
+                            <input autoFocus type="text" inputMode="numeric" value={editingStep.val}
+                              onChange={ev => setEditingStep({ ...editingStep, val: ev.target.value.replace(/[^0-9]/g, '') })}
+                              onBlur={commitEditingStep}
+                              onKeyDown={ev => { if (ev.key === 'Enter') commitEditingStep(); if (ev.key === 'Escape') setEditingStep(null); }}
+                              style={{ width: 30, padding: '2px 4px', background: '#0f0f12', border: '1px solid #7dd3fc', borderRadius: 4, color: '#7dd3fc', fontSize: 12, outline: 'none', fontWeight: 600, fontFamily: 'inherit' }} />
+                          </span>
+                        ) : (
+                          <span style={{ fontSize: 12, color: '#7dd3fc', minWidth: 36, fontVariantNumeric: 'tabular-nums', cursor: 'pointer', padding: '4px 6px', borderRadius: 4, transition: 'all 0.15s', fontWeight: 600 }}
+                            onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.08)'; ev.currentTarget.style.textDecoration = 'underline'; }}
                             onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.textDecoration = 'none'; }}
-                            onClick={async () => { const v = await showPrompt('修改步骤名称', step.name); if (v === null || v === step.name) return; const ns = [...stepsList]; ns[si] = {...ns[si], name: v}; saveSteps(ns); }}
-                          >{step.name}</div>
-                          {step.detail && <div style={{ fontSize: 11, color: '#d0d4dc', padding: '2px 6px', cursor: 'pointer', transition: 'all 0.15s', borderRadius: 4 }}
+                            onClick={() => setEditingStep({ si, field: 'day', val: String(step.day) })}
+                          >{si > 0 && stepsList[si-1].day === step.day ? '' : 'D' + step.day}</span>
+                        )}
+                        <div style={{ flex: 1 }}>
+                          {editingStep && editingStep.si === si && editingStep.field === 'name' ? (
+                            <input autoFocus type="text" value={editingStep.val}
+                              onChange={ev => setEditingStep({ ...editingStep, val: ev.target.value })}
+                              onBlur={commitEditingStep}
+                              onKeyDown={ev => { if (ev.key === 'Enter') commitEditingStep(); if (ev.key === 'Escape') setEditingStep(null); }}
+                              style={{ width: '100%', padding: '2px 6px', background: '#0f0f12', border: '1px solid #7dd3fc', borderRadius: 4, color: '#f0f0f2', fontSize: 13, outline: 'none', fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+                          ) : (
+                            <div style={{ fontSize: 13, color: '#f0f0f2', cursor: 'pointer', padding: '2px 6px', borderRadius: 4, transition: 'all 0.15s', fontWeight: 500 }}
+                              onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(255,255,255,0.03)'; ev.currentTarget.style.textDecoration = 'underline dashed rgba(255,255,255,0.2)'; }}
+                              onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.textDecoration = 'none'; }}
+                              onClick={() => setEditingStep({ si, field: 'name', val: step.name })}
+                            >{step.name}</div>
+                          )}
+                          {editingStep && editingStep.si === si && editingStep.field === 'detail' ? (
+                            <textarea autoFocus value={editingStep.val}
+                              onChange={ev => setEditingStep({ ...editingStep, val: ev.target.value })}
+                              onBlur={commitEditingStep}
+                              onKeyDown={ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) commitEditingStep(); if (ev.key === 'Escape') setEditingStep(null); }}
+                              style={{ width: '100%', minHeight: 50, padding: '4px 6px', background: '#0f0f12', border: '1px solid #7dd3fc', borderRadius: 4, color: '#d0d4dc', fontSize: 11, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', resize: 'vertical' }} />
+                          ) : step.detail ? (<div style={{ fontSize: 11, color: '#d0d4dc', padding: '2px 6px', cursor: 'pointer', transition: 'all 0.15s', borderRadius: 4 }}
                             onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
                             onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; }}
-                            onClick={async () => { const v = await showPrompt('修改步骤详情', step.detail); if (v === null) return; const ns = [...stepsList]; ns[si] = {...ns[si], detail: v}; saveSteps(ns); }}
-                          >{step.detail}</div>}
+                            onClick={() => setEditingStep({ si, field: 'detail', val: step.detail })}
+                          >{step.detail}</div>) : null}
                         </div>
                         <span style={{ fontSize: 12, color: '#d0d4dc', cursor: 'pointer', padding: '2px 6px', opacity: 0.3, transition: 'all 0.2s' }}
                           onMouseEnter={ev => { ev.currentTarget.style.opacity = '1'; ev.currentTarget.style.color = '#fc8181'; }}
@@ -2452,6 +2637,7 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
   const { experiments, projects, references, navigateTo, deleteExperiment } = useStore();
   const [expCtxMenu, setExpCtxMenu] = useState<{x:number;y:number;exp:any}|null>(null);
   React.useEffect(() => { if (!expCtxMenu) return; const cl = () => setExpCtxMenu(null); const t = setTimeout(() => { window.addEventListener('click', cl); window.addEventListener('scroll', cl, true); }, 0); return () => { clearTimeout(t); window.removeEventListener('click', cl); window.removeEventListener('scroll', cl, true); }; }, [expCtxMenu]);
+  const [expSearch, setExpSearch] = useState('');
   const [sortKey, setSortKey] = useState<'title'|'date'|'project'>('date');
   const [sortAsc, setSortAsc] = useState(false);
 
@@ -2482,7 +2668,14 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
     typeCounts[t] = (typeCounts[t] || 0) + 1;
   });
 
-  const filtered = experiments;
+  const filtered = experiments.filter((e: any) => {
+    const q = expSearch.trim().toLowerCase();
+    if (!q) return true;
+    if ((e.title || '').toLowerCase().includes(q)) return true;
+    const projName = (projects.find((p: any) => p.id === e.projectId)?.name || '').toLowerCase();
+    if (projName.includes(q)) return true;
+    return false;
+  });
 
   const sorted = [...filtered].sort((a: any, b: any) => {
     const va = sortKey === 'title' ? a.title : sortKey === 'project' ? (projects.find((p: any) => p.id === a.projectId)?.name || '') : a.date;
@@ -2500,7 +2693,17 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
     <div className="page-container">
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
         <div className="page-title">实验记录</div>
-        <div style={{ padding: '6px 16px', borderRadius: 6, background: 'rgba(125,211,252,0.1)', border: '1px solid rgba(125,211,252,0.2)', color: '#7dd3fc', fontSize: 13, fontWeight: 600, cursor: 'pointer' }} onClick={() => onAction('experiment')}>+ 新建实验</div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ position: 'relative', width: 220 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d0d4dc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" value={expSearch} onChange={e => setExpSearch(e.target.value)} placeholder="搜索实验"
+              style={{ width: '100%', padding: '7px 10px 7px 30px', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: '#f1f5f9', fontSize: 12, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', transition: 'border 0.2s' }}
+              onFocus={e => e.target.style.borderColor = 'rgba(125,211,252,0.35)'}
+              onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
+            />
+          </div>
+          <div style={{ padding: '6px 16px', borderRadius: 6, background: 'rgba(125,211,252,0.1)', border: '1px solid rgba(125,211,252,0.2)', color: '#7dd3fc', fontSize: 13, fontWeight: 600, cursor: 'pointer' }} onClick={() => onAction('experiment')}>+ 新建实验</div>
+        </div>
       </div>
 
 
@@ -2542,11 +2745,6 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
             onClick={() => { const exp = expCtxMenu.exp; setExpCtxMenu(null); navigateTo('experimentDetail', { experimentId: exp.id, projectId: exp.projectId }); }}
           >详情</div>
-          <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
-            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
-            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
-            onClick={() => { localStorage.setItem('biolab-edit-exp', JSON.stringify(expCtxMenu.exp)); onAction('experiment'); setExpCtxMenu(null); }}
-          >编辑</div>
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
@@ -2630,7 +2828,14 @@ function LibraryPage({ onAction }: { onAction: (t: string) => void }) {
         <div className="page-title">文献</div>
 
         <div style={{ display: 'flex', gap: 8 }}>
-          <input className="form-input" style={{ width: 200, padding: '6px 12px', fontSize: 12 }} value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索文献..." />
+          <div style={{ position: 'relative', width: 220 }}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d0d4dc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input type="text" value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索文献"
+              style={{ width: '100%', padding: '7px 10px 7px 30px', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: '#f1f5f9', fontSize: 12, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', transition: 'border 0.2s' }}
+              onFocus={e => e.target.style.borderColor = 'rgba(125,211,252,0.35)'}
+              onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
+            />
+          </div>
           <div style={{ padding: '6px 16px', borderRadius: 6, background: 'rgba(125,211,252,0.1)', border: '1px solid rgba(125,211,252,0.2)', color: '#7dd3fc', fontSize: 13, fontWeight: 600, cursor: 'pointer', transition: 'all 0.2s' }}
             onClick={() => onAction('reference')}
             onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.2)'; ev.currentTarget.style.transform = 'translateY(-1px)'; ev.currentTarget.style.boxShadow = '0 2px 8px rgba(125,211,252,0.15)'; }}
@@ -2709,7 +2914,7 @@ function LibraryPage({ onAction }: { onAction: (t: string) => void }) {
             <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 6, transition: 'background 0.15s' }}
               onMouseEnter={ev => ev.currentTarget.style.background = 'rgba(252,129,129,0.06)'}
               onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}
-              onClick={() => { deleteReference(contextMenu.ref.id); setContextMenu(null); }}
+              onClick={async () => { const ref = contextMenu.ref; setContextMenu(null); if (await showConfirm('确定删除文献？')) deleteReference(ref.id); }}
             >删除</div>
           </div>
         </div>
@@ -2769,8 +2974,16 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
   const [userTemplates, setUserTemplates] = useState<any[]>(() => {
     try { return JSON.parse(localStorage.getItem('biolab-user-templates') || '[]'); } catch { return []; }
   });
+  React.useEffect(() => {
+    const reload = () => {
+      try { setUserTemplates(JSON.parse(localStorage.getItem('biolab-user-templates') || '[]')); } catch {}
+    };
+    window.addEventListener('biolab-tpl-updated', reload);
+    return () => window.removeEventListener('biolab-tpl-updated', reload);
+  }, []);
   const [tplCtxMenu, setTplCtxMenu] = useState<{x:number;y:number;tpl:any}|null>(null);
   const [tplSearch, setTplSearch] = useState('');
+  const [methodSearch, setMethodSearch] = useState('');
   React.useEffect(() => { if (!tplCtxMenu) return; const cl = () => setTplCtxMenu(null); const t = setTimeout(() => { window.addEventListener('click', cl); window.addEventListener('scroll', cl, true); }, 0); return () => { clearTimeout(t); window.removeEventListener('click', cl); window.removeEventListener('scroll', cl, true); }; }, [tplCtxMenu]);
 
   const deleteTemplate = (id: string) => {
@@ -2839,10 +3052,25 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
   // ── Main grid view ──
   return (
     <div className="page-container">
-      <div style={{ marginBottom: 20 }}><div className="page-title">方法</div></div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12 }}>
+        <div className="page-title">方法</div>
+        <div style={{ position: 'relative', flex: '0 1 280px' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d0d4dc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" value={methodSearch} onChange={e => setMethodSearch(e.target.value)} placeholder="搜索方法"
+            style={{ width: '100%', padding: '7px 10px 7px 30px', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: '#f1f5f9', fontSize: 12, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', transition: 'border 0.2s' }}
+            onFocus={e => e.target.style.borderColor = 'rgba(125,211,252,0.35)'}
+            onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
+          />
+        </div>
+      </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, marginBottom: 28 }}>
-        {categories.map((cat, ci) => (
+        {categories.filter(cat => {
+          const q = methodSearch.trim().toLowerCase();
+          if (!q) return true;
+          if (cat.key.toLowerCase().includes(q)) return true;
+          return cat.methods.some(m => m.toLowerCase().includes(q));
+        }).map((cat, ci) => (
           <div key={cat.key} onClick={() => setSelectedCat(cat.key)} style={{
             borderRadius: 14, padding: '20px 8px 16px', textAlign: 'center', cursor: 'pointer',
             background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
@@ -2867,6 +3095,14 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
           </div>
         ))}
       </div>
+      {methodSearch.trim() && categories.filter(cat => {
+        const q = methodSearch.trim().toLowerCase();
+        return cat.key.toLowerCase().includes(q) || cat.methods.some(m => m.toLowerCase().includes(q));
+      }).length === 0 && (
+        <div style={{ padding: '32px 0 28px', textAlign: 'center', color: '#d0d4dc', fontSize: 13, marginBottom: 28 }}>
+          未找到与「{methodSearch}」相关的方法
+        </div>
+      )}
 
       {/* Literature templates */}
       <div>
@@ -2927,7 +3163,7 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
-            onClick={() => { const lt = tplCtxMenu.tpl; setTplCtxMenu(null); onSelectTemplate({ id: lt.id, name: lt.name, fields: { type: lt.cat }, steps: lt.steps }); }}
+            onClick={() => { const lt = tplCtxMenu.tpl; setTplCtxMenu(null); localStorage.setItem('biolab-edit-tpl', JSON.stringify(lt)); onSelectTemplate({ id: lt.id, name: lt.name, fields: { type: lt.cat }, steps: lt.steps }); }}
           >编辑</div>
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
@@ -3150,6 +3386,31 @@ function ApiKeySettings() {
 }
 
 
+function TopbarTime() {
+  const [now, setNow] = useState(new Date());
+  const [tz, setTz] = useState(() => localStorage.getItem('biolab-clock-tz') || Intl.DateTimeFormat().resolvedOptions().timeZone);
+  useEffect(() => {
+    const tick = setInterval(() => setNow(new Date()), 1000);
+    const onStorage = () => setTz(localStorage.getItem('biolab-clock-tz') || Intl.DateTimeFormat().resolvedOptions().timeZone);
+    window.addEventListener('storage', onStorage);
+    const pollTz = setInterval(onStorage, 1000);
+    return () => { clearInterval(tick); clearInterval(pollTz); window.removeEventListener('storage', onStorage); };
+  }, []);
+  const tzNow = new Date(now.toLocaleString('en-US', { timeZone: tz }));
+  const month = tzNow.getMonth() + 1;
+  const date = tzNow.getDate();
+  const weekday = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][tzNow.getDay()];
+  const hh = String(tzNow.getHours()).padStart(2, '0');
+  const mm = String(tzNow.getMinutes()).padStart(2, '0');
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 14, fontSize: 15, color: '#ffffff', fontFamily: "'Times New Roman', '等线', 'DengXian', Times, serif", fontVariantNumeric: 'tabular-nums', userSelect: 'none', fontWeight: 700, letterSpacing: '0.02em', textShadow: '0 0 8px rgba(255,255,255,0.25)' }}>
+      <span style={{ color: 'inherit', opacity: 1, fontWeight: 'inherit' }}>{month}月{date}日</span>
+      <span style={{ color: 'inherit', opacity: 1, fontWeight: 'inherit' }}>{weekday}</span>
+      <span style={{ color: 'inherit', opacity: 1, fontWeight: 'inherit' }}>{hh}:{mm}</span>
+    </div>
+  );
+}
+
 function UserMenu({ onLogout, userName, avatarUrl, bgEnabled, setBgEnabled }: { onLogout: () => void; userName: string; avatarUrl?: string; bgEnabled: boolean; setBgEnabled: (v: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [showPwModal, setShowPwModal] = useState(false);
@@ -3182,6 +3443,7 @@ function UserMenu({ onLogout, userName, avatarUrl, bgEnabled, setBgEnabled }: { 
 
   return (
     <>
+    <TopbarTime />
     <div ref={ref} style={{ position: 'relative' }}>
       <div className="topbar-user" onClick={() => setOpen(!open)}>
         {avatarUrl ? <img src={avatarUrl} className="avatar-img" alt="" /> : <div className="avatar">{userName?.[0]?.toUpperCase() || "?"}</div>}
@@ -3241,7 +3503,6 @@ export default function App() {
 
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') { e.preventDefault(); setSearchOpen(true); }
       if (e.key === 'ArrowLeft' && e.altKey) { e.preventDefault(); const keys = navTabs.map(t => t.key); const ci = keys.indexOf(useStore.getState().currentView); if (ci > 0) navigateTo(keys[ci-1] as any); }
       if (e.key === 'ArrowRight' && e.altKey) { e.preventDefault(); const keys = navTabs.map(t => t.key); const ci = keys.indexOf(useStore.getState().currentView); if (ci >= 0 && ci < keys.length - 1) navigateTo(keys[ci+1] as any); }
       if (e.key === 'Escape') { setSearchOpen(false); useStore.getState().setSearchQuery(''); }
@@ -3320,7 +3581,7 @@ export default function App() {
           setGlobalTimerDone(true);
           setGTimerTotal(0);
           try { isPermissionGranted().then(granted => { if (granted) { sendNotification({ title: 'BioLab', body: '计时结束！' }); } else { requestPermission().then(p => { if (p === 'granted') sendNotification({ title: 'BioLab', body: '计时结束！' }); }); } }); } catch {}
-          try { new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdH2JkZKOgnBjWVpjcH+MlZaShXhsYl1ib3yIkJGMgHRnXltfanmFjo+LfnJmXVtdZ3WBio2JfHBkXFpbY3F+iY2Jf3RoYF5gZ3R+homHfHFmX11eZHF8homHfHJoYl9hZnJ8hYeEe3FnYV9fY298hIaEenBmYV9fY298hIaDenBnYl9gZHB8hIaDe3FoY2FiZXJ8g4SDe3FpZGJjZnN9g4ODe3JqZWRlZ3R+g4KCenJqZmVmaHV+goKBenNsZ2doant/gYGAeXNtaGhpbHyAgH9+eXRuammpa3x/f358eXVvammqa3x+fn17eHVva2prbHx+fn17eHZwbGtsbX1+fXt5d3JubW5vcX5+fXt5eHNvb3Bxcn5+fXt6eXRxcXJzdH9+fHt7enV0dHV2eH9+fHx8fHd3eHl6e39+fX1+f3t8fX5/gH9/f4CBgoOEhYaGh4iJioqLjI2Oj5CQkZKTk5SVlpaXmJmZmpucnJ2en5+goaGio6SkpaanqKmqq6ytrq+wsbKztLW2t7i5uru8vb6/wMHCw8TFxsfIycrLzM3Oz9DR0tPU1dbX2Nna29ze3+Dh4uPk5ebn6Onq6+zt7u/w8fLz9PX29/j4+fr7/P3+').play().catch(() => {}); } catch {}
+          try { playAlarm(); } catch {}
           return 0;
         }
         return l - 1;
@@ -3340,7 +3601,7 @@ export default function App() {
       </div>
 
       {globalTimerDone && createPortal(
-        <div style={{ position: 'fixed', inset: 0, zIndex: 999999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => setGlobalTimerDone(false)}>
+        <div style={{ position: 'fixed', inset: 0, zIndex: 999999, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => { stopAlarm(); setGlobalTimerDone(false); }}>
           <div className="timer-holo" onClick={e => e.stopPropagation()}>
             <div className="timer-holo-grid" />
             <div className="timer-holo-hex" style={{ top: 10, right: 20 }} />
@@ -3348,7 +3609,7 @@ export default function App() {
             <div style={{ position: 'relative', zIndex: 1, textAlign: 'center' }}>
               <div className="timer-holo-time">00:00:00</div>
               <div className="timer-holo-bar"><div className="timer-holo-bar-fill" /></div>
-              <div className="timer-holo-btn" onClick={() => setGlobalTimerDone(false)}>确认</div>
+              <div className="timer-holo-btn" onClick={() => { stopAlarm(); setGlobalTimerDone(false); }}>确认</div>
             </div>
           </div>
         </div>,
@@ -3369,7 +3630,6 @@ export default function App() {
           ))}
         </div>
 
-        <div className="search-trigger" onClick={() => setSearchOpen(true)}><Search size={15} color="#576178" /><span>搜索</span></div>
                 <ApiKeySettings />
       <UserMenu onLogout={logout} userName={currentUser} avatarUrl={avatarUrl} bgEnabled={bgEnabled} setBgEnabled={setBgEnabled} />
       </div>
@@ -3404,7 +3664,6 @@ export default function App() {
 
       <div className="content-area page-fade-in" key={currentView}>{renderView()}</div>
 
-      {searchOpen && <SearchOverlay />}
       
       {showTemplateChooser && <TemplateChooser onSelect={handleSelectTemplate} onClose={() => setShowTemplateChooser(false)} />}
       {showNewExperiment && <NewExperimentModal template={selectedTemplate} onClose={() => { setShowNewExperiment(false); setSelectedTemplate(null); }} defaultProjectId={selectedProjectId || undefined} />}

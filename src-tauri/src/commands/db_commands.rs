@@ -327,13 +327,18 @@ description 中必须保留：
 - 体积/浓度：100μL, 1mg/mL
 - 肿瘤细胞系：B16, MC38, 4T1, CT26, LLC, EL4
 
-### 重复步骤展开规则
-如果描述说"aPD-L1 every 3 days from Day 3"且实验总周期约21天：
-→ 生成 Day3, Day6, Day9, Day12, Day15, Day18 各一个步骤
-每个步骤的 name 相同，description 标注"第X次给药"
+### 重复步骤合并规则(重要!避免输出过长被截断)
+对于循环重复操作(测量、监测、维持给药等),只生成 1 条步骤,在 description 注明"每X天1次,共N次,持续到 DayY"。
 
-如果描述说"tumor measurement every other day from Day 7"：
-→ 生成 Day7, Day9, Day11, Day13... 直到实验结束
+示例:
+- "aPD-L1 every 3 days from Day 3 for 4 doses" → 仅生成 1 条:
+  {"day": 3, "name": "aPD-L1治疗", "description": "anti-PD-L1 200μg i.p. 每3天1次,共4次(D3,D6,D9,D12)", "repeat": 3}
+- "tumor measurement every other day from Day 7 to Day 25" → 仅生成 1 条:
+  {"day": 7, "name": "肿瘤测量", "description": "测量肿瘤大小,隔天1次,持续到D25(共10次)", "repeat": 2}
+- "weighing every day from Day 0" → 仅生成 1 条:
+  {"day": 0, "name": "体重记录", "description": "每日称重,持续整个实验", "repeat": 1}
+
+非循环的关键节点(接种、给药首次、放疗、采血、处死等)正常独立生成,不要合并。
 
 ### 实验名称生成
 从文本中提取：
@@ -341,45 +346,32 @@ description 中必须保留：
 - 肿瘤模型：如"B16-OVA"
 - 合成为："ACT联合aPD-L1治疗B16-OVA模型"
 
-## 示例
+## display_mode 判断
+- 1-2天的离散操作(WB/qPCR/流式/染色) → "steps"
+- 多天动物实验/治疗周期 → "timeline"
+- 生信/计算分析任务 → "checklist"
 
-重要判断示例：
-- "Western blot检测p-STAT3" → display_mode: "steps"（1-2天内完成，步骤顺序展示）
-- "B16荷瘤小鼠联合治疗" → display_mode: "timeline"（多天实验，按天展示）
-- "RNA-seq差异分析" → display_mode: "checklist"（计算任务，清单展示）
-- "qPCR检测基因表达" → display_mode: "steps"
-- "流式检测T细胞亚群" → display_mode: "steps"
-- "免疫组化染色" → display_mode: "steps"
-- "单细胞测序分析" → display_mode: "checklist"
+## 示例
 
 输入：
 B16-OVA cells (2×10^5) were implanted s.c. into C57BL/6 mice. On day 5, mice received 5Gy irradiation. On day 6, 1×10^6 OT-I T cells were transferred i.v. Starting from day 8, mice were treated with anti-PD-L1 (200μg, i.p.) every 3 days for 4 doses. Tumor size was measured every other day starting from day 7. Mice were sacrificed on day 25.
 
-输出：
+输出（注意:循环步骤合并为1条,不展开）：
 {
   "experiment_name": "放疗联合OT-I和aPD-L1治疗B16-OVA",
+  "display_mode": "timeline",
+  "experiment_type": "动物实验",
   "steps": [
     {"day": 0, "name": "肿瘤接种", "description": "B16-OVA 2×10^5 皮下接种 C57BL/6小鼠", "repeat": null},
     {"day": 5, "name": "放射治疗", "description": "局部照射 5Gy", "repeat": null},
     {"day": 6, "name": "T细胞过继", "description": "OT-I T细胞 1×10^6 静脉注射(i.v.)", "repeat": null},
-    {"day": 7, "name": "肿瘤测量", "description": "测量肿瘤大小，隔天测量", "repeat": null},
-    {"day": 8, "name": "aPD-L1治疗", "description": "anti-PD-L1 200μg 腹腔注射(i.p.) 第1次", "repeat": null},
-    {"day": 9, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 11, "name": "aPD-L1治疗", "description": "anti-PD-L1 200μg i.p. 第2次", "repeat": null},
-    {"day": 11, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 13, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 14, "name": "aPD-L1治疗", "description": "anti-PD-L1 200μg i.p. 第3次", "repeat": null},
-    {"day": 15, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 17, "name": "aPD-L1治疗", "description": "anti-PD-L1 200μg i.p. 第4次（末次）", "repeat": null},
-    {"day": 17, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 19, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 21, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 23, "name": "肿瘤测量", "description": "测量肿瘤大小", "repeat": null},
-    {"day": 25, "name": "取材处死", "description": "处死小鼠，收集肿瘤和脾脏组织", "repeat": null}
+    {"day": 7, "name": "肿瘤测量", "description": "测量肿瘤大小,隔天1次,持续到D25(共10次)", "repeat": 2},
+    {"day": 8, "name": "aPD-L1治疗", "description": "anti-PD-L1 200μg i.p. 每3天1次,共4次(D8,D11,D14,D17)", "repeat": 3},
+    {"day": 25, "name": "取材处死", "description": "处死小鼠,收集肿瘤和脾脏组织", "repeat": null}
   ]
 }
 
-注意：重复步骤必须全部展开为独立步骤，这样用户每天打开APP就能看到当天具体要做什么。"#;
+关键提醒:循环操作必须合并为1条,绝不展开成多条!这样输出短,不会被截断。"#;
 
     let body = serde_json::json!({
         "model": model,

@@ -1,100 +1,56 @@
-name: 'Release'
+name: Release
 
 on:
   push:
     tags:
       - 'v*'
 
-permissions:
-  contents: write
-
 jobs:
-  build:
+  publish-tauri:
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: macos-latest
-            args: '--target aarch64-apple-darwin'
-            target: aarch64-apple-darwin
-          - platform: macos-latest
-            args: '--target x86_64-apple-darwin'
-            target: x86_64-apple-darwin
-          - platform: windows-latest
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+            rust-target: 'aarch64-apple-darwin,x86_64-apple-darwin'
+          - platform: 'windows-latest'
             args: ''
-            target: ''
+            rust-target: ''
 
     runs-on: ${{ matrix.platform }}
 
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 9
 
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
+          cache: 'pnpm'
 
-      - name: Install pnpm
-        run: npm install -g pnpm
-
-      - name: Install Rust stable
+      - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.rust-target }}
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
 
       - name: Install frontend dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
 
-      - name: Build Tauri app (macOS - 不直接发布,先签名)
-        if: matrix.platform == 'macos-latest'
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
-          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
-        with:
-          args: ${{ matrix.args }}
-
-      - name: Ad-hoc 签名 macOS .app(避免 "已损坏" 提示)
-        if: matrix.platform == 'macos-latest'
-        run: |
-          set -e
-          APP_PATH=$(find src-tauri/target/${{ matrix.target }}/release/bundle/macos -maxdepth 2 -name '*.app' | head -1)
-          echo "找到 app: $APP_PATH"
-          # 深度签名所有内嵌二进制
-          codesign --force --deep --sign - "$APP_PATH"
-          echo "签名后验证:"
-          codesign --verify --deep --strict --verbose=2 "$APP_PATH" || true
-          # 移除隔离属性
-          xattr -cr "$APP_PATH"
-          # 重新打包 .dmg(覆盖原来未签名的)
-          DMG_PATH=$(find src-tauri/target/${{ matrix.target }}/release/bundle/dmg -maxdepth 2 -name '*.dmg' | head -1)
-          if [ -n "$DMG_PATH" ]; then
-            echo "删除旧 dmg: $DMG_PATH"
-            rm -f "$DMG_PATH"
-            APP_NAME=$(basename "$APP_PATH" .app)
-            VERSION=$(echo "$DMG_PATH" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
-            DMG_DIR=$(dirname "$DMG_PATH")
-            NEW_DMG="$DMG_DIR/${APP_NAME}_${VERSION}_$(echo ${{ matrix.target }} | sed 's/aarch64-apple-darwin/aarch64/;s/x86_64-apple-darwin/x64/').dmg"
-            echo "重新打包 dmg: $NEW_DMG"
-            hdiutil create -volname "$APP_NAME" -srcfolder "$APP_PATH" -ov -format UDZO "$NEW_DMG"
-            ls -la "$DMG_DIR"
-          fi
-
-      - name: 上传 macOS 资产到 Release
-        if: matrix.platform == 'macos-latest'
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: 'Lab Data System ${{ github.ref_name }}'
-          body: '新版本已发布，请下载安装。\n\nmacOS 用户:首次打开如提示"已损坏",请右键点击 → 打开。'
-          draft: false
-          prerelease: false
-          files: |
-            src-tauri/target/${{ matrix.target }}/release/bundle/dmg/*.dmg
-
-      - name: Build Tauri app (Windows - 走原流程)
-        if: matrix.platform == 'windows-latest'
+      - name: Build and publish
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -103,6 +59,9 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: 'Lab Data System ${{ github.ref_name }}'
-          releaseBody: '新版本已发布，请下载安装。'
+          releaseBody: ${{ github.event.head_commit.message }}
           releaseDraft: false
           prerelease: false
+          includeUpdaterJson: true
+          updaterJsonKeepUniversal: true
+          args: ${{ matrix.args }}

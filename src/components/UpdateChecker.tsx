@@ -14,7 +14,7 @@ export function UpdateChecker() {
       const { check } = await import('@tauri-apps/plugin-updater');
       const update = await check();
       if (update) { setUpdateInfo({ version: update.version, body: update.body || '新版本已发布' }); setUpdateAvailable(true); }
-    } catch {}
+    } catch (e) { console.error('[UpdateChecker] 检查更新失败:', e); }
   }
 
   async function doUpdate() {

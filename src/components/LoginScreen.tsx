@@ -13,6 +13,7 @@ export function LoginScreen({ onLoginSuccess }: Props) {
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [rememberMe, setRememberMe] = useState(() => localStorage.getItem('biolab-remember-me') === '1');
   const [userList, setUserList] = useState<string[]>([]);
   const [dataDir, setDataDir] = useState('');
 
@@ -25,6 +26,12 @@ export function LoginScreen({ onLoginSuccess }: Props) {
         const users = await invoke<string[]>('get_user_list');
         setUserList(users);
         if (users.length > 0) setUsername(users[0]);
+        // 读取保存的凭据
+        if (localStorage.getItem('biolab-remember-me') === '1') {
+          const savedU = localStorage.getItem('biolab-saved-username') || '';
+          const savedP = localStorage.getItem('biolab-saved-password') || '';
+          if (savedU && users.includes(savedU)) { setUsername(savedU); setPassword(savedP); }
+        }
         setMode('login');
       } else {
         const dir = await invoke<string>('get_data_dir');
@@ -37,7 +44,19 @@ export function LoginScreen({ onLoginSuccess }: Props) {
   async function handleLogin() {
     if (!username || !password) { setError('请填写用户名和密码'); return; }
     setLoading(true); setError('');
-    try { await invoke<string>('login_user', { username, password }); onLoginSuccess(username); }
+    try {
+      await invoke<string>('login_user', { username, password });
+      if (rememberMe) {
+        localStorage.setItem('biolab-remember-me', '1');
+        localStorage.setItem('biolab-saved-username', username);
+        localStorage.setItem('biolab-saved-password', password);
+      } else {
+        localStorage.removeItem('biolab-remember-me');
+        localStorage.removeItem('biolab-saved-username');
+        localStorage.removeItem('biolab-saved-password');
+      }
+      onLoginSuccess(username);
+    }
     catch (e: any) { setError(e.toString()); }
     finally { setLoading(false); }
   }
@@ -114,6 +133,12 @@ export function LoginScreen({ onLoginSuccess }: Props) {
             ) : <input style={s.input} value={username} onChange={e => setUsername(e.target.value)} autoFocus />}
             </div>
             <div style={s.formGroup}><label style={s.label}>密码</label><input type="password" style={s.input} value={password} onChange={e => setPassword(e.target.value)} placeholder="请输入密码" onKeyDown={e => e.key === 'Enter' && handleLogin()} /></div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14, cursor: 'pointer', userSelect: 'none' }} onClick={() => setRememberMe(!rememberMe)}>
+              <div style={{ width: 16, height: 16, borderRadius: 4, border: '1.5px solid ' + (rememberMe ? '#3a8fd4' : 'rgba(255,255,255,0.15)'), background: rememberMe ? '#3a8fd4' : 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s', flexShrink: 0 }}>
+                {rememberMe && <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"/></svg>}
+              </div>
+              <span style={{ fontSize: 12, color: rememberMe ? '#7dd3fc' : '#8892a4', transition: 'color 0.15s' }}>记住密码</span>
+            </div>
             <button style={{ ...s.primaryBtn, opacity: loading ? 0.6 : 1 }} onClick={handleLogin} disabled={loading}>{loading ? '登录中...' : '登 录'}</button>
             <button style={s.linkBtn} onClick={() => { setMode('register'); setError(''); setPassword(''); setUsername(''); }}>创建新账号</button>
           </>
