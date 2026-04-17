@@ -1230,14 +1230,14 @@ function CalendarWidget({ experiments, onNewExp }: { experiments: any[]; onNewEx
               onMouseEnter={(ev: any) => { ev.currentTarget.style.whiteSpace = 'normal'; ev.currentTarget.style.background = 'rgba(125,211,252,0.06)'; }}
               onMouseLeave={(ev: any) => { ev.currentTarget.style.whiteSpace = 'nowrap'; ev.currentTarget.style.background = 'transparent'; }}
             >{item}</div>)}
-          {(() => { const selDate = new Date(yr, mo, sel); const todayMid = new Date(); todayMid.setHours(0,0,0,0); return selDate >= todayMid; })() && <div className="cw-popup-add" onClick={(e) => { e.stopPropagation(); const dateStr = yr + '-' + String(mo+1).padStart(2,'0') + '-' + String(sel).padStart(2,'0'); localStorage.setItem('biolab-new-exp-date', dateStr); setSel(null); onNewExp(); }}>+ 新建实验</div>}
+          
         </div>
       )}
       {sel && selItems.length === 0 && (
         <div className="cw-popup">
           <div className="cw-popup-title">{mo+1}月{sel}日</div>
           <div className="cw-popup-empty">当天无实验</div>
-          {(() => { const selDate = new Date(yr, mo, sel); const todayMid = new Date(); todayMid.setHours(0,0,0,0); return selDate >= todayMid; })() && <div className="cw-popup-add" onClick={(e) => { e.stopPropagation(); const dateStr = yr + '-' + String(mo+1).padStart(2,'0') + '-' + String(sel).padStart(2,'0'); localStorage.setItem('biolab-new-exp-date', dateStr); setSel(null); onNewExp(); }}>+ 新建实验</div>}
+          
         </div>
       )}
     </div>
@@ -1483,15 +1483,12 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
       await useStore.getState().loadAll();
     } catch(err) { console.error(err); }
   };
+  // 编辑步骤时,不再通过"外部点击"触发保存/折叠。
+  // 只有点击 header 区域或 ∧ 图标才保存折叠(见 header onClick 逻辑)。
   React.useEffect(() => {
     if (!editingStepKey) return;
-    const onDown = (ev: MouseEvent) => {
-      const tg = ev.target as HTMLElement | null;
-      if (tg && tg.closest && tg.closest('[data-step-edit-form]')) return;
-      saveEditingStep().then(() => setEditingStepKey(null));
-    };
-    const t = setTimeout(() => { document.addEventListener('mousedown', onDown, true); }, 0);
-    return () => { clearTimeout(t); document.removeEventListener('mousedown', onDown, true); };
+    // 空占位,保留 effect 结构以便将来加逻辑
+    return () => {};
   }, [editingStepKey]);
 
   const [stepCtxMenu, setStepCtxMenu] = useState<{x: number; y: number; exp: any; mi: number; day: string; label: string} | null>(null);
@@ -1759,8 +1756,10 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                           <div className={'step-morph-card' + (isStepExpanded ? ' show' : '')}><div>
                             <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
                               onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}>
-                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { const tg = ev.target as HTMLElement; if (tg && tg.closest && tg.closest('input, textarea')) return; if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
-                                <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', height: 18, cursor: 'pointer' }}>
+                              </div>
+                              <button title="折叠" onClick={(ev) => { ev.stopPropagation(); if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 2, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s', zIndex: 2 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                              <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
                                 <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
                               {isEditing ? (
                                 <input data-step-edit-form autoFocus value={editingStepData.label} onChange={ev => setEditingStepData({ ...editingStepData, label: ev.target.value })} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
@@ -2004,8 +2003,10 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                           <div className={'step-morph-card' + (isStepExpanded ? ' show' : '')}><div>
                             <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
                               onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}>
-                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { const tg = ev.target as HTMLElement; if (tg && tg.closest && tg.closest('input, textarea')) return; if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
-                                <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', height: 18, cursor: 'pointer' }}>
+                              </div>
+                              <button title="折叠" onClick={(ev) => { ev.stopPropagation(); if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 2, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s', zIndex: 2 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                              <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
                                 <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
                               {isEditing ? (
                                 <input data-step-edit-form autoFocus value={editingStepData.label} onChange={ev => setEditingStepData({ ...editingStepData, label: ev.target.value })} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
