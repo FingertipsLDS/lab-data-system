@@ -44,8 +44,8 @@ pub async fn import_files_to_experiment(
         {
             let conn = db.0.lock().map_err(|e| e.to_string())?;
             conn.execute(
-                "INSERT INTO files (id, name, original_name, file_type, local_path, file_size, tags) VALUES (?1,?2,?3,?4,?5,?6,'[]')",
-                params![id, original_name, original_name, ext, local_path, file_size],
+                "INSERT INTO files (id, name, original_name, file_type, local_path, file_size, tags, source_path) VALUES (?1,?2,?3,?4,?5,?6,'[]',?7)",
+                params![id, original_name, original_name, ext, local_path, file_size, path_str],
             ).map_err(|e| e.to_string())?;
 
             // 关联到实验
@@ -117,6 +117,51 @@ pub async fn open_file(app: tauri::AppHandle, local_path: String) -> Result<(), 
     Ok(())
 }
 
+// 在系统文件管理器中显示文件(macOS Finder / Windows Explorer / Linux)
+#[tauri::command]
+pub async fn reveal_in_folder(app: tauri::AppHandle, local_path: String) -> Result<(), String> {
+    let input = std::path::Path::new(&local_path);
+    let full_path = if input.is_absolute() {
+        input.to_path_buf()
+    } else {
+        let data_dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
+        data_dir.join(&local_path)
+    };
+
+    eprintln!("[reveal_in_folder] input: {}", local_path);
+    eprintln!("[reveal_in_folder] resolved: {}", full_path.display());
+    eprintln!("[reveal_in_folder] exists: {}", full_path.exists());
+
+    if !full_path.exists() {
+        return Err(format!("文件不存在: {}", full_path.display()));
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .args(["-R", full_path.to_str().ok_or("路径转换失败")?])
+            .spawn()
+            .map_err(|e| format!("无法打开 Finder: {}", e))?;
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("explorer")
+            .args(["/select,", full_path.to_str().ok_or("路径转换失败")?])
+            .spawn()
+            .map_err(|e| format!("无法打开资源管理器: {}", e))?;
+    }
+
+    #[cfg(target_os = "linux")]
+    {
+        // Linux 上退化为打开父目录
+        let parent = full_path.parent().ok_or("无法获取父目录")?;
+        open::that(parent).map_err(|e| format!("无法打开目录: {}", e))?;
+    }
+
+    Ok(())
+}
+
 #[tauri::command]
 pub fn read_file_base64(local_path: String, data_dir: tauri::State<crate::DbState>) -> Result<String, String> {
     use std::fs;
@@ -146,4 +191,14 @@ pub fn read_file_base64(local_path: String, data_dir: tauri::State<crate::DbStat
     };
     
     Ok(format!("data:{};base64,{}", mime, b64))
+}
+
+#[tauri::command]
+pub async fn write_export_file(path: String, data: String) -> Result<(), String> {
+    use base64::Engine;
+    let bytes = base64::engine::general_purpose::STANDARD.decode(&data)
+        .map_err(|e| format!("Base64解码失败: {}", e))?;
+    std::fs::write(&path, &bytes)
+        .map_err(|e| format!("写入文件失败: {}", e))?;
+    Ok(())
 }

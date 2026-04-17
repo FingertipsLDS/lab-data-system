@@ -60,7 +60,7 @@ pub fn run() {
             commands::db_commands::get_references, commands::db_commands::create_reference, commands::db_commands::ai_parse_experiment, commands::db_commands::update_reference, commands::db_commands::delete_reference,
             commands::db_commands::get_files, commands::db_commands::get_templates, commands::db_commands::search_all,
             commands::file_commands::import_files_to_experiment, commands::file_commands::get_experiment_files,
-            commands::file_commands::delete_experiment_file, commands::file_commands::open_file, commands::file_commands::read_file_base64,
+            commands::file_commands::delete_experiment_file, commands::file_commands::open_file, commands::file_commands::reveal_in_folder, commands::file_commands::read_file_base64, commands::file_commands::write_export_file,
         ])
         .run(tauri::generate_context!()).expect("Lab Data System 启动失败");
 }

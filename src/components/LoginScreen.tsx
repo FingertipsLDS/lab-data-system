@@ -88,8 +88,16 @@ export function LoginScreen({ onLoginSuccess }: Props) {
 
   return (
     <div style={s.container}>
+      {mode === 'register' && (
+        <button
+          onClick={() => { setMode('login'); setError(''); setConfirmPassword(''); setDisplayName(''); }}
+          style={{ position: 'fixed', top: 16, left: 16, background: 'rgba(26,31,46,0.85)', backdropFilter: 'blur(8px)', border: '1px solid rgba(125,211,252,0.15)', borderRadius: 6, padding: '6px 14px', color: '#7dd3fc', fontSize: 13, cursor: 'pointer', transition: 'all 0.2s', zIndex: 1000 }}
+          onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.4)'; }}
+          onMouseLeave={ev => { ev.currentTarget.style.background = 'rgba(26,31,46,0.85)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.15)'; }}
+        >← 返回</button>
+      )}
       <div style={s.card}>
-        <div style={s.logoSection}>
+<div style={s.logoSection}>
           <div style={s.logoIcon}>
             <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#63b3ed" strokeWidth="1.5" strokeLinecap="round"><path d="M2 15c6.667-6 13.333 0 20-6"/><path d="M9 22c1.798-1.998 2.518-3.995 2.807-5.993"/><path d="M15 2c-1.798 1.998-2.518 3.995-2.807 5.993"/></svg>
           </div>

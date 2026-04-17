@@ -7,6 +7,7 @@ use std::fs;
 const MIGRATIONS: &[(u32, &str, &str)] = &[
     (1, "初始 schema", include_str!("001_initial.sql")),
     (2, "用户表", include_str!("002_users.sql")),
+    (3, "文件来源路径", include_str!("003_source_path.sql")),
 ];
 
 pub enum MigrationResult {

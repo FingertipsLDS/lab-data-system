@@ -80,6 +80,128 @@ function showPrompt(msg: string, defaultVal = '') {
   });
 }
 
+
+async function exportTemplateToWord(lt: any) {
+  if (!lt) return;
+  const { Document, Packer, Paragraph, HeadingLevel, TextRun } = await import('docx');
+  const { save: saveDialog } = await import('@tauri-apps/plugin-dialog');
+  const { invoke: inv } = await import('@tauri-apps/api/core');
+
+  const today = new Date();
+  const pad = (n: number) => String(n).padStart(2, '0');
+  const dateStr = today.getFullYear() + '-' + pad(today.getMonth() + 1) + '-' + pad(today.getDate());
+
+  const children: any[] = [
+    new Paragraph({ children: [new TextRun({ text: lt.name || '未命名模板', bold: true, size: 36, font: 'PingFang SC' })], spacing: { after: 100 } }),
+    new Paragraph({ children: [new TextRun({ text: dateStr, size: 20, color: '888888', font: 'PingFang SC' })], spacing: { after: 300 } }),
+  ];
+
+  const steps = Array.isArray(lt.steps) ? [...lt.steps] : [];
+  const sorted = steps
+    .filter((s: any) => s && (s.name || s.label))
+    .sort((a: any, b: any) => (a.day ?? 0) - (b.day ?? 0));
+
+  if (sorted.length > 0) {
+    children.push(new Paragraph({ text: '实验步骤', heading: HeadingLevel.HEADING_2, spacing: { before: 300, after: 100 } }));
+    for (const s of sorted) {
+      const stepTitle = 'D' + (s.day ?? 0) + ' · ' + (s.name || s.label || '');
+      children.push(new Paragraph({ children: [new TextRun({ text: stepTitle, bold: true, size: 24, font: 'PingFang SC' })], spacing: { before: 120, after: 60 } }));
+      const detail = (s.detail || s.description || '').trim();
+      if (detail) {
+        for (const line of detail.split('\n')) {
+          children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22, font: 'PingFang SC' })], spacing: { after: 60, line: 360 }, indent: { left: 360 } }));
+        }
+      }
+    }
+  }
+
+  const doc = new Document({ sections: [{ children }] });
+  const blob = await Packer.toBlob(doc);
+
+  const defaultName = (lt.name || '模板') + '_' + dateStr + '.docx';
+  const savePath = await saveDialog({ defaultPath: defaultName, filters: [{ name: 'Word', extensions: ['docx'] }] });
+  if (!savePath) return;
+
+  const arrayBuf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const base64 = btoa(binary);
+
+  await inv('write_export_file', { path: savePath, data: base64 });
+}
+
+async function exportExperimentToWord(exp: any) {
+  if (!exp) return;
+  const { Document, Packer, Paragraph, HeadingLevel, TextRun } = await import('docx');
+  const { save: saveDialog } = await import('@tauri-apps/plugin-dialog');
+  const { invoke: inv } = await import('@tauri-apps/api/core');
+
+  const children: any[] = [
+    new Paragraph({ children: [new TextRun({ text: exp.title || '未命名实验', bold: true, size: 36, font: 'PingFang SC' })], spacing: { after: 100 } }),
+    new Paragraph({ children: [new TextRun({ text: (exp.date || '') + ' · ' + (exp.type || ''), size: 20, color: '888888', font: 'PingFang SC' })], spacing: { after: 300 } }),
+  ];
+
+  const pushHeading = (title: string) => {
+    children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_2, spacing: { before: 300, after: 100 } }));
+  };
+  const pushTextBlock = (text: string) => {
+    for (const line of text.split('\n')) {
+      children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22, font: 'PingFang SC' })], spacing: { after: 60, line: 360 } }));
+    }
+  };
+  const pushSection = (title: string, text: string) => {
+    if (!text || !text.trim()) return;
+    pushHeading(title);
+    pushTextBlock(text);
+  };
+
+  pushSection('实验目的', exp.purpose || '');
+  pushSection('样本材料', exp.materials || '');
+
+  let milestones: any[] = [];
+  try {
+    const tl = JSON.parse(exp.parameters || '{}');
+    milestones = Array.isArray(tl.milestones) ? tl.milestones : [];
+  } catch {}
+  const sortedMs = [...milestones].sort((a: any, b: any) => (a.day ?? 0) - (b.day ?? 0));
+  if (sortedMs.length > 0) {
+    pushHeading('实验步骤');
+    for (const m of sortedMs) {
+      const stepTitle = 'D' + (m.day ?? 0) + ' · ' + (m.label || '');
+      children.push(new Paragraph({ children: [new TextRun({ text: stepTitle, bold: true, size: 24, font: 'PingFang SC' })], spacing: { before: 120, after: 60 } }));
+      const detail = (m.detail || '').trim();
+      if (detail) {
+        for (const line of detail.split('\n')) {
+          children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22, font: 'PingFang SC' })], spacing: { after: 60, line: 360 }, indent: { left: 360 } }));
+        }
+      }
+    }
+  } else if (exp.steps && exp.steps.trim()) {
+    pushSection('实验步骤', exp.steps);
+  }
+
+  pushSection('实验结果', exp.results || '');
+  pushSection('结论', exp.conclusion || '');
+  pushSection('问题记录', exp.issues || '');
+  pushSection('下一步计划', exp.nextSteps || '');
+
+  const doc = new Document({ sections: [{ children }] });
+  const blob = await Packer.toBlob(doc);
+
+  const savePath = await saveDialog({ defaultPath: (exp.title || '实验') + '.docx', filters: [{ name: 'Word', extensions: ['docx'] }] });
+  if (!savePath) return;
+
+  const arrayBuf = await blob.arrayBuffer();
+  const bytes = new Uint8Array(arrayBuf);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  const base64 = btoa(binary);
+
+  await inv('write_export_file', { path: savePath, data: base64 });
+}
+
+
 function DialogHost() {
   const [dlg, setDlg] = useState<any>(null);
   const [inputVal, setInputVal] = useState('');
@@ -403,7 +525,7 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
   const fmtDate = (d: Date) => (d.getMonth()+1) + '/' + d.getDate();
 
   const addStep = () => {
-    const lastDay = steps.length > 0 ? steps[steps.length - 1].day + 1 : 0;
+    const lastDay = steps.length > 0 ? Math.max(...steps.map(s => s.day ?? 0)) + 1 : 0;
     setSteps(prev => [...prev, { day: lastDay, name: '', detail: '' }]);
   };
 
@@ -512,7 +634,7 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
         ...editTpl,
         name: tplName,
         cat: template?.fields?.type || editTpl.cat || '自定义',
-        desc: steps.filter(s => s.name.trim()).map(s => 'D' + s.day + ' ' + s.name).join(' → '),
+        desc: steps.filter(s => s.name.trim()).sort((a, b) => a.day - b.day).map(s => 'D' + s.day + ' ' + s.name).join(' → '),
         steps: steps.filter(s => s.name.trim()).map(s => ({ day: s.day, name: s.name, detail: s.detail })),
       };
       const saved = JSON.parse(localStorage.getItem('biolab-user-templates') || '[]');
@@ -562,7 +684,7 @@ function NewExperimentModal({ template, onClose, defaultProjectId }: { template:
     if (saveTpl && steps.length > 0 && steps.some(s => s.name.trim())) {
       const tplName = name.trim() || '未命名模板';
       const cleanSteps = steps.filter(s => s.name.trim()).map(s => ({ day: s.day, name: s.name, detail: s.detail }));
-      const desc = cleanSteps.map(s => 'D' + s.day + ' ' + s.name).join(' → ');
+      const desc = [...cleanSteps].sort((a, b) => a.day - b.day).map(s => 'D' + s.day + ' ' + s.name).join(' → ');
       const saved = JSON.parse(localStorage.getItem('biolab-user-templates') || '[]');
       const isExistingUserTpl = template?.id && String(template.id).startsWith('user-');
       if (isExistingUserTpl) {
@@ -1291,6 +1413,89 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
   const [selectedStep, setSelectedStep] = useState<Record<string, number>>({});
   const [ctxMenu, setCtxMenu] = useState<{x: number; y: number; exp: any} | null>(null);
   const [stepEdit, setStepEdit] = useState<{exp: any; mi: number; day: string; label: string} | null>(null);
+  const [addingHomeStep, setAddingHomeStep] = useState<{expId: string; exp: any; day: string; name: string; detail: string} | null>(null);
+  const [addingHomeStepClosing, setAddingHomeStepClosing] = React.useState(false);
+  const [addingHomeStepHover, setAddingHomeStepHover] = React.useState(false);
+  const addingHomeStepRef = React.useRef(addingHomeStep);
+  React.useEffect(() => { addingHomeStepRef.current = addingHomeStep; }, [addingHomeStep]);
+  const saveAddingHomeStep = async () => {
+    const cur = addingHomeStepRef.current;
+    if (!cur) return;
+    if (!cur.name.trim()) return;
+    const d = parseInt(cur.day);
+    if (isNaN(d)) return;
+    try {
+      const exp = cur.exp;
+      let tl: any = {};
+      try { tl = JSON.parse(exp.parameters || '{}'); } catch {}
+      const ms = tl.milestones || [];
+      ms.push({ day: d, label: cur.name.trim(), detail: cur.detail.trim() });
+      ms.sort((a: any, b: any) => a.day - b.day);
+      tl.milestones = ms;
+      tl.duration_days = Math.max(...ms.map((m: any) => m.day), 0) + 1;
+      const params = JSON.stringify(tl);
+      const stepsText = ms.map((m: any) => 'D' + m.day + ': ' + m.label).join('\n');
+      const { invoke: inv } = await import('@tauri-apps/api/core');
+      await inv('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: stepsText, parameters: params, results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' });
+      await useStore.getState().loadAll();
+    } catch(err) { console.error(err); }
+  };
+  React.useEffect(() => {
+    if (!addingHomeStep) return;
+    const closeForm = () => { saveAddingHomeStep().then(() => { setAddingHomeStepClosing(true); setTimeout(() => { setAddingHomeStep(null); setAddingHomeStepClosing(false); }, 360); }); };
+    const onDown = (ev: MouseEvent) => {
+      const tg = ev.target as HTMLElement | null;
+      if (!tg || !tg.closest) { closeForm(); return; }
+      if (tg.closest('[data-add-step-header]')) { closeForm(); return; }
+      if (tg.closest('[data-add-step-form]')) return;
+      closeForm();
+    };
+    const t = setTimeout(() => { document.addEventListener('mousedown', onDown, true); }, 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', onDown, true); };
+  }, [addingHomeStep?.expId]);
+
+  const [expandedStepKey, setExpandedStepKey] = useState<string | null>(null);
+
+  const [editingStepKey, setEditingStepKey] = useState<string | null>(null);
+  const [hoveredStepKey, setHoveredStepKey] = useState<string | null>(null);
+  const [editingStepData, setEditingStepData] = useState<{day: string; label: string; detail: string; exp?: any; mi?: number}>({ day: '', label: '', detail: '' });
+  const editingStepDataRef = React.useRef(editingStepData);
+  React.useEffect(() => { editingStepDataRef.current = editingStepData; }, [editingStepData]);
+  const saveEditingStep = async () => {
+    const ed = editingStepDataRef.current;
+    if (!ed.exp || ed.mi === undefined) return;
+    const d = parseInt(ed.day);
+    if (isNaN(d) || !ed.label.trim()) return;
+    try {
+      let tl: any = {};
+      try { tl = JSON.parse(ed.exp.parameters || '{}'); } catch {}
+      const msArr = tl.milestones || [];
+      if (msArr[ed.mi]) {
+        msArr[ed.mi] = { ...msArr[ed.mi], day: d, label: ed.label.trim(), detail: ed.detail.trim() };
+      }
+      msArr.sort((a: any, b: any) => a.day - b.day);
+      tl.milestones = msArr;
+      tl.duration_days = Math.max(...msArr.map((m: any) => m.day), 0) + 1;
+      const params = JSON.stringify(tl);
+      const stepsText = msArr.map((m: any) => 'D' + m.day + ': ' + m.label).join('\n');
+      const { invoke: inv } = await import('@tauri-apps/api/core');
+      await inv('update_experiment', { id: ed.exp.id, title: ed.exp.title, type: ed.exp.type||'', date: ed.exp.date||'', purpose: ed.exp.purpose||'', materials: ed.exp.materials||'', steps: stepsText, parameters: params, results: ed.exp.results||'', conclusion: ed.exp.conclusion||'', issues: ed.exp.issues||'', nextSteps: ed.exp.nextSteps||'', status: ed.exp.status||'进行中' });
+      await useStore.getState().loadAll();
+    } catch(err) { console.error(err); }
+  };
+  React.useEffect(() => {
+    if (!editingStepKey) return;
+    const onDown = (ev: MouseEvent) => {
+      const tg = ev.target as HTMLElement | null;
+      if (tg && tg.closest && tg.closest('[data-step-edit-form]')) return;
+      saveEditingStep().then(() => setEditingStepKey(null));
+    };
+    const t = setTimeout(() => { document.addEventListener('mousedown', onDown, true); }, 0);
+    return () => { clearTimeout(t); document.removeEventListener('mousedown', onDown, true); };
+  }, [editingStepKey]);
+
+  const [stepCtxMenu, setStepCtxMenu] = useState<{x: number; y: number; exp: any; mi: number; day: string; label: string} | null>(null);
+  React.useEffect(() => { if (!stepCtxMenu) return; const cl = (ev: any) => { const tg = ev?.target as HTMLElement | null; if (tg && tg.closest && tg.closest('[data-step-ctx-menu]')) return; setStepCtxMenu(null); }; const t = setTimeout(() => { document.addEventListener('mousedown', cl, true); document.addEventListener('contextmenu', cl, true); window.addEventListener('scroll', () => setStepCtxMenu(null), true); }, 0); return () => { clearTimeout(t); document.removeEventListener('mousedown', cl, true); document.removeEventListener('contextmenu', cl, true); }; }, [stepCtxMenu]);
   const saveStepEdit = async () => {
     if (!stepEdit) return;
     const exp = stepEdit.exp;
@@ -1458,11 +1663,12 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
           <div key={e.id} className={`tl-card tl-c-${(expIndexMap.get(e.id) ?? ei) % 10}`} style={{
             background: '#18181b', borderRadius: 14, marginBottom: 12,
             border: '1px solid rgba(255,255,255,0.04)',
+            borderTop: '3px solid rgba(255,255,255,0.12)',
             transition: 'all 0.3s, transform 0.25s, box-shadow 0.25s',
           }}
-            onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }}
-            onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '1'; }}
-            onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '0'; }}
+            onContextMenu={(ev) => { if (isExpanded) return; ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }}
+            onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; ev.currentTarget.style.borderTop = '3px solid ' + color.main + '55'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '1'; }}
+            onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; ev.currentTarget.style.borderTop = '3px solid rgba(255,255,255,0.12)'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '0'; }}
           >
             {/* Collapsed card */}
             <div style={{ padding: '16px 20px', cursor: 'pointer' }} onClick={() => setExpanded(isExpanded ? null : e.id)}>
@@ -1511,55 +1717,130 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                   const msDate = new Date(startD); msDate.setDate(msDate.getDate() + ms.day);
                   const isDone = daysP > ms.day;
                   const isT = daysP === ms.day;
-                  return (
-                    <div key={mi} className="home-step-row" style={{
-                      display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px',
-                      borderRadius: 8, marginBottom: 2, position: 'relative',
-                      background: isT ? color.light : 'transparent',
-                      transition: 'all 0.2s', cursor: 'pointer',
-                    }}
-                      onMouseEnter={(ev: any) => { if (!isT) ev.currentTarget.style.background = 'rgba(125,211,252,0.08)'; const del = ev.currentTarget.querySelector('.home-step-del'); if (del) del.style.opacity = '1'; }}
-                      onMouseLeave={(ev: any) => { if (!isT) ev.currentTarget.style.background = 'transparent'; const del = ev.currentTarget.querySelector('.home-step-del'); if (del) del.style.opacity = '0'; }}
-                      onClick={() => setStepEdit({ exp: e, mi, day: String(ms.day), label: ms.label })}
-                    >
-                      <div style={{
-                        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                        background: isT ? color.main : '#3a3a40',
-                        boxShadow: isT ? '0 0 6px ' + color.main : 'none',
-                      }} />
-                      <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', opacity: (mi > 0 && sortedMs[mi-1].day === ms.day) ? 0 : 1 }}>{mi > 0 && sortedMs[mi-1].day === ms.day ? '' : 'D' + ms.day}</span>
-                      <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, marginLeft: 4, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
-                      <span style={{ fontSize: 11, color: isT ? color.main : '#6a6a72', fontVariantNumeric: 'tabular-nums', marginRight: 70, minWidth: 90, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
-                      {isT && <span style={{
-                        position: 'absolute', right: 32, top: '50%', transform: 'translateY(-50%)',
-                        fontSize: 10, padding: '2px 8px', borderRadius: 8,
-                        background: color.main, color: '#fff', fontWeight: 600,
-                      }}>今天</span>}
-                      <span className="home-step-del" style={{ fontSize: 12, color: '#d0d4dc', cursor: 'pointer', opacity: 0, transition: 'all 0.2s', padding: '0 4px' }}
-                        onClick={async () => {
-                          const newMs = sortedMs.filter((_: any, i: number) => i !== mi);
-                          const params = JSON.stringify({ ...tl, milestones: newMs });
-                          const { invoke: inv } = await import('@tauri-apps/api/core');
-                          await inv('update_experiment', { id: e.id, title: e.title, type: e.type||'', date: e.date||'', purpose: e.purpose||'', materials: e.materials||'', steps: e.steps||'', parameters: params, results: e.results||'', conclusion: e.conclusion||'', issues: e.issues||'', nextSteps: e.nextSteps||'', status: e.status||'进行中' });
-                          useStore.getState().loadAll();
-                        }}
-                      >✕</span>
-                    </div>
-                  );
+                  return (() => {
+                      const stepKey = e.id + '-' + mi;
+                      const isStepExpanded = expandedStepKey === stepKey;
+                      let stepDetail = '';
+                      try {
+                        const tlp = JSON.parse(e.parameters || '{}');
+                        const milestones = tlp.milestones || [];
+                        if (milestones[mi] && milestones[mi].detail) {
+                          stepDetail = milestones[mi].detail;
+                        }
+                      } catch {}
+
+                      const sameDayAsPrev = mi > 0 && sortedMs[mi-1].day === ms.day;
+                      const isEditing = editingStepKey === stepKey;
+                      const isFirstOfDay = mi === 0 || sortedMs[mi-1].day !== ms.day;
+                      return (
+                        <div key={mi}>
+                          {isFirstOfDay && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                              <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' }}>D{ms.day}</span>
+                              <span style={{ fontSize: 10, flex: 1, color: isT ? color.main : '#606878' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
+                              {isT && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
+                            </div>
+                          )}
+                          {/* 收起行 */}
+                          <div className={'step-morph-row' + (isStepExpanded ? ' hide' : '')} style={{
+                            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px 6px 56px',
+                            borderRadius: 6, background: 'transparent', cursor: 'pointer',
+                          }}
+                            onMouseEnter={(ev: any) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.06)'; }}
+                            onMouseLeave={(ev: any) => { ev.currentTarget.style.background = 'transparent'; }}
+                            onClick={() => setExpandedStepKey(stepKey)}
+                            onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}
+                          >
+                            <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                            <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
+                          </div>
+                          {/* 展开卡片 */}
+                          <div className={'step-morph-card' + (isStepExpanded ? ' show' : '')}><div>
+                            <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
+                              onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}>
+                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { const tg = ev.target as HTMLElement; if (tg && tg.closest && tg.closest('input, textarea')) return; if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
+                                <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                                <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
+                              {isEditing ? (
+                                <input data-step-edit-form autoFocus value={editingStepData.label} onChange={ev => setEditingStepData({ ...editingStepData, label: ev.target.value })} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                              ) : (
+                                <div style={{ fontSize: 14, fontWeight: 500, color: '#f0f0f2', marginBottom: 4 }}>{ms.label}</div>
+                              )}
+                              </div>
+                              <div style={{ padding: '0 12px 0 56px' }}>
+                              <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
+                              <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                              {isEditing ? (
+                                <textarea data-step-edit-form value={editingStepData.detail} onChange={ev => setEditingStepData({ ...editingStepData, detail: ev.target.value })} rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }} onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }} ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                              ) : (
+                                stepDetail ? <div style={{ fontSize: 12, color: '#8890a0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{stepDetail}</div> : <div style={{ fontSize: 12, color: '#4a5060', fontStyle: 'italic' }}>暂无具体操作</div>
+                              )}
+                              {isEditing ? (
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                                  
+                                  
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}{isT ? ' · 今天' : ''}</div>
+                              )}
+                              </div>
+                            </div>
+                          </div></div>
+                        </div>
+                      );
+                  })();
                 })}
 
-                {/* Add step */}
+                {addingHomeStep && addingHomeStep.expId === e.id ? (() => {
+                  const addDay = parseInt(addingHomeStep.day);
+                  const addDate = new Date(startD); if (!isNaN(addDay)) addDate.setDate(addDate.getDate() + addDay);
+                  const isAddToday = !isNaN(addDay) && daysP === addDay;
+                  return (
+                  <div className={'step-morph-card' + (addingHomeStepClosing ? '' : ' show')}><div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isAddToday ? color.main : '#3a3a40', boxShadow: isAddToday ? '0 0 6px ' + color.main : 'none' }} />
+                      <span data-add-step-form style={{ fontSize: 11, color: isAddToday ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isAddToday ? color.main : 'rgba(255,255,255,0.1)'), background: isAddToday ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                        D<input data-add-step-form type="text" inputMode="numeric" value={addingHomeStep.day}
+                          onChange={ev => setAddingHomeStep({ ...addingHomeStep, day: ev.target.value.replace(/[^0-9]/g, '') })}
+                          style={{ width: 20, background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', textAlign: 'center', padding: 0 }} />
+                      </span>
+                      <span style={{ fontSize: 10, flex: 1, color: isAddToday ? color.main : '#606878' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}</span>
+                      {isAddToday && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
+                    </div>
+                    <div data-add-step-form style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (addingHomeStepHover ? color.main + '55' : color.main + '40'), borderTop: '3px solid ' + (addingHomeStepHover ? color.main + '80' : color.main + '55'), boxShadow: addingHomeStepHover ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: addingHomeStepHover ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}>
+                      <div data-add-step-header onMouseEnter={() => setAddingHomeStepHover(true)} onMouseLeave={() => setAddingHomeStepHover(false)} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
+                        <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
+                        <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                      </div>
+                      <div style={{ padding: '0 12px 0 56px' }}>
+                      <input data-add-step-form autoFocus value={addingHomeStep.name} onChange={ev => setAddingHomeStep({ ...addingHomeStep, name: ev.target.value })}
+                        onKeyDown={ev => { if (ev.key === 'Escape') setAddingHomeStep(null); }}
+                        style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                      <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
+                      <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                      <textarea data-add-step-form value={addingHomeStep.detail} onChange={ev => setAddingHomeStep({ ...addingHomeStep, detail: ev.target.value })}
+                        rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
+                        onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                        ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                      <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}{isAddToday ? ' · 今天' : ''}</div>
+                      </div>
+                    </div>
+                  </div></div>
+                  );
+                })() : (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px', cursor: 'pointer', opacity: 0.4, transition: 'opacity 0.2s' }}
                   onMouseEnter={ev => ev.currentTarget.style.opacity = '1'}
                   onMouseLeave={ev => ev.currentTarget.style.opacity = '0.4'}
                   onClick={() => {
                     const nextDay = String((sortedMs.length > 0 ? sortedMs[sortedMs.length-1].day : -1) + 1);
-                    setStepEdit({ exp: e, mi: -1, day: nextDay, label: '' });
+                    setAddingHomeStep({ expId: e.id, exp: e, day: nextDay, name: '', detail: '' });
                   }}
                 >
                   <div style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px dashed #3a3a40' }} />
                   <span style={{ fontSize: 12, color: '#d0d4dc' }}>添加步骤</span>
                 </div>
+                )}
               </div>
             )}
           </div>
@@ -1627,11 +1908,12 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
           <div key={e.id} className={`tl-card tl-c-${(expIndexMap.get(e.id) ?? ei) % 10}`} style={{
             background: '#18181b', borderRadius: 14, marginBottom: 12,
             border: '1px solid rgba(255,255,255,0.04)',
+            borderTop: '3px solid rgba(255,255,255,0.12)',
             transition: 'all 0.3s, transform 0.25s, box-shadow 0.25s',
           }}
-            onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }}
-            onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '1'; }}
-            onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '0'; }}
+            onContextMenu={(ev) => { if (isExpanded) return; ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }}
+            onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; ev.currentTarget.style.borderTop = '3px solid ' + color.main + '55'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '1'; }}
+            onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; ev.currentTarget.style.borderTop = '3px solid rgba(255,255,255,0.12)'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '0'; }}
           >
             {/* Collapsed card */}
             <div style={{ padding: '16px 20px', cursor: 'pointer' }} onClick={() => setExpanded(isExpanded ? null : e.id)}>
@@ -1680,55 +1962,130 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                   const msDate = new Date(startD); msDate.setDate(msDate.getDate() + ms.day);
                   const isDone = daysP > ms.day;
                   const isT = daysP === ms.day;
-                  return (
-                    <div key={mi} className="home-step-row" style={{
-                      display: 'flex', alignItems: 'center', gap: 10, padding: '7px 12px',
-                      borderRadius: 8, marginBottom: 2, position: 'relative',
-                      background: isT ? color.light : 'transparent',
-                      transition: 'all 0.2s', cursor: 'pointer',
-                    }}
-                      onMouseEnter={(ev: any) => { if (!isT) ev.currentTarget.style.background = 'rgba(125,211,252,0.08)'; const del = ev.currentTarget.querySelector('.home-step-del'); if (del) del.style.opacity = '1'; }}
-                      onMouseLeave={(ev: any) => { if (!isT) ev.currentTarget.style.background = 'transparent'; const del = ev.currentTarget.querySelector('.home-step-del'); if (del) del.style.opacity = '0'; }}
-                      onClick={() => setStepEdit({ exp: e, mi, day: String(ms.day), label: ms.label })}
-                    >
-                      <div style={{
-                        width: 8, height: 8, borderRadius: '50%', flexShrink: 0,
-                        background: isT ? color.main : '#3a3a40',
-                        boxShadow: isT ? '0 0 6px ' + color.main : 'none',
-                      }} />
-                      <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', opacity: (mi > 0 && sortedMs[mi-1].day === ms.day) ? 0 : 1 }}>{mi > 0 && sortedMs[mi-1].day === ms.day ? '' : 'D' + ms.day}</span>
-                      <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, marginLeft: 4, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
-                      <span style={{ fontSize: 11, color: isT ? color.main : '#6a6a72', fontVariantNumeric: 'tabular-nums', marginRight: 70, minWidth: 90, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
-                      {isT && <span style={{
-                        position: 'absolute', right: 32, top: '50%', transform: 'translateY(-50%)',
-                        fontSize: 10, padding: '2px 8px', borderRadius: 8,
-                        background: color.main, color: '#fff', fontWeight: 600,
-                      }}>今天</span>}
-                      <span className="home-step-del" style={{ fontSize: 12, color: '#d0d4dc', cursor: 'pointer', opacity: 0, transition: 'all 0.2s', padding: '0 4px' }}
-                        onClick={async () => {
-                          const newMs = sortedMs.filter((_: any, i: number) => i !== mi);
-                          const params = JSON.stringify({ ...tl, milestones: newMs });
-                          const { invoke: inv } = await import('@tauri-apps/api/core');
-                          await inv('update_experiment', { id: e.id, title: e.title, type: e.type||'', date: e.date||'', purpose: e.purpose||'', materials: e.materials||'', steps: e.steps||'', parameters: params, results: e.results||'', conclusion: e.conclusion||'', issues: e.issues||'', nextSteps: e.nextSteps||'', status: e.status||'进行中' });
-                          useStore.getState().loadAll();
-                        }}
-                      >✕</span>
-                    </div>
-                  );
+                  return (() => {
+                      const stepKey = e.id + '-' + mi;
+                      const isStepExpanded = expandedStepKey === stepKey;
+                      let stepDetail = '';
+                      try {
+                        const tlp = JSON.parse(e.parameters || '{}');
+                        const milestones = tlp.milestones || [];
+                        if (milestones[mi] && milestones[mi].detail) {
+                          stepDetail = milestones[mi].detail;
+                        }
+                      } catch {}
+
+                      const sameDayAsPrev = mi > 0 && sortedMs[mi-1].day === ms.day;
+                      const isEditing = editingStepKey === stepKey;
+                      const isFirstOfDay = mi === 0 || sortedMs[mi-1].day !== ms.day;
+                      return (
+                        <div key={mi}>
+                          {isFirstOfDay && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
+                              <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                              <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' }}>D{ms.day}</span>
+                              <span style={{ fontSize: 10, flex: 1, color: isT ? color.main : '#606878' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
+                              {isT && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
+                            </div>
+                          )}
+                          {/* 收起行 */}
+                          <div className={'step-morph-row' + (isStepExpanded ? ' hide' : '')} style={{
+                            display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px 6px 56px',
+                            borderRadius: 6, background: 'transparent', cursor: 'pointer',
+                          }}
+                            onMouseEnter={(ev: any) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.06)'; }}
+                            onMouseLeave={(ev: any) => { ev.currentTarget.style.background = 'transparent'; }}
+                            onClick={() => setExpandedStepKey(stepKey)}
+                            onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}
+                          >
+                            <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                            <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
+                          </div>
+                          {/* 展开卡片 */}
+                          <div className={'step-morph-card' + (isStepExpanded ? ' show' : '')}><div>
+                            <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
+                              onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}>
+                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { const tg = ev.target as HTMLElement; if (tg && tg.closest && tg.closest('input, textarea')) return; if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
+                                <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                                <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
+                              {isEditing ? (
+                                <input data-step-edit-form autoFocus value={editingStepData.label} onChange={ev => setEditingStepData({ ...editingStepData, label: ev.target.value })} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                              ) : (
+                                <div style={{ fontSize: 14, fontWeight: 500, color: '#f0f0f2', marginBottom: 4 }}>{ms.label}</div>
+                              )}
+                              </div>
+                              <div style={{ padding: '0 12px 0 56px' }}>
+                              <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
+                              <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                              {isEditing ? (
+                                <textarea data-step-edit-form value={editingStepData.detail} onChange={ev => setEditingStepData({ ...editingStepData, detail: ev.target.value })} rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }} onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }} ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                              ) : (
+                                stepDetail ? <div style={{ fontSize: 12, color: '#8890a0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{stepDetail}</div> : <div style={{ fontSize: 12, color: '#4a5060', fontStyle: 'italic' }}>暂无具体操作</div>
+                              )}
+                              {isEditing ? (
+                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
+                                  
+                                  
+                                </div>
+                              ) : (
+                                <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}{isT ? ' · 今天' : ''}</div>
+                              )}
+                              </div>
+                            </div>
+                          </div></div>
+                        </div>
+                      );
+                  })();
                 })}
 
-                {/* Add step */}
+                {addingHomeStep && addingHomeStep.expId === e.id ? (() => {
+                  const addDay = parseInt(addingHomeStep.day);
+                  const addDate = new Date(startD); if (!isNaN(addDay)) addDate.setDate(addDate.getDate() + addDay);
+                  const isAddToday = !isNaN(addDay) && daysP === addDay;
+                  return (
+                  <div className={'step-morph-card' + (addingHomeStepClosing ? '' : ' show')}><div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
+                      <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isAddToday ? color.main : '#3a3a40', boxShadow: isAddToday ? '0 0 6px ' + color.main : 'none' }} />
+                      <span data-add-step-form style={{ fontSize: 11, color: isAddToday ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isAddToday ? color.main : 'rgba(255,255,255,0.1)'), background: isAddToday ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                        D<input data-add-step-form type="text" inputMode="numeric" value={addingHomeStep.day}
+                          onChange={ev => setAddingHomeStep({ ...addingHomeStep, day: ev.target.value.replace(/[^0-9]/g, '') })}
+                          style={{ width: 20, background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', textAlign: 'center', padding: 0 }} />
+                      </span>
+                      <span style={{ fontSize: 10, flex: 1, color: isAddToday ? color.main : '#606878' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}</span>
+                      {isAddToday && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
+                    </div>
+                    <div data-add-step-form style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (addingHomeStepHover ? color.main + '55' : color.main + '40'), borderTop: '3px solid ' + (addingHomeStepHover ? color.main + '80' : color.main + '55'), boxShadow: addingHomeStepHover ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: addingHomeStepHover ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}>
+                      <div data-add-step-header onMouseEnter={() => setAddingHomeStepHover(true)} onMouseLeave={() => setAddingHomeStepHover(false)} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
+                        <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
+                        <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                      </div>
+                      <div style={{ padding: '0 12px 0 56px' }}>
+                      <input data-add-step-form autoFocus value={addingHomeStep.name} onChange={ev => setAddingHomeStep({ ...addingHomeStep, name: ev.target.value })}
+                        onKeyDown={ev => { if (ev.key === 'Escape') setAddingHomeStep(null); }}
+                        style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                      <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
+                      <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                      <textarea data-add-step-form value={addingHomeStep.detail} onChange={ev => setAddingHomeStep({ ...addingHomeStep, detail: ev.target.value })}
+                        rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
+                        onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                        ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                      <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}{isAddToday ? ' · 今天' : ''}</div>
+                      </div>
+                    </div>
+                  </div></div>
+                  );
+                })() : (
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 12px', cursor: 'pointer', opacity: 0.4, transition: 'opacity 0.2s' }}
                   onMouseEnter={ev => ev.currentTarget.style.opacity = '1'}
                   onMouseLeave={ev => ev.currentTarget.style.opacity = '0.4'}
                   onClick={() => {
                     const nextDay = String((sortedMs.length > 0 ? sortedMs[sortedMs.length-1].day : -1) + 1);
-                    setStepEdit({ exp: e, mi: -1, day: nextDay, label: '' });
+                    setAddingHomeStep({ expId: e.id, exp: e, day: nextDay, name: '', detail: '' });
                   }}
                 >
                   <div style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px dashed #3a3a40' }} />
                   <span style={{ fontSize: 12, color: '#d0d4dc' }}>添加步骤</span>
                 </div>
+                )}
               </div>
             )}
           </div>
@@ -1747,6 +2104,20 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
         <CalendarWidget experiments={experiments} onNewExp={() => onAction('experiment')} />
         <div id="timer-sidebar-target" />
       </div>
+      {stepCtxMenu && createPortal(
+        <div data-step-ctx-menu style={{ position: 'fixed', left: Math.min(stepCtxMenu.x, window.innerWidth - 140), top: Math.min(stepCtxMenu.y, window.innerHeight - 90), zIndex: 99999, background: '#1a1a1f', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: 4, minWidth: 120, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
+            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
+            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
+            onClick={() => { const s = stepCtxMenu; setStepCtxMenu(null); const key = s.exp.id + '-' + s.mi; setExpandedStepKey(key); setEditingStepKey(key); let detail = ''; try { const tlp = JSON.parse(s.exp.parameters || '{}'); detail = (tlp.milestones || [])[s.mi]?.detail || ''; } catch {} setEditingStepData({ day: s.day, label: s.label, detail, exp: s.exp, mi: s.mi }); }}
+          >编辑</div>
+          <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 0' }} />
+          <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
+            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
+            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
+            onClick={async () => { const s = stepCtxMenu; setStepCtxMenu(null); try { let tl: any = {}; try { tl = JSON.parse(s.exp.parameters || '{}'); } catch {} const ms = (tl.milestones || []).filter((_: any, i: number) => i !== s.mi); tl.milestones = ms; tl.duration_days = ms.length > 0 ? Math.max(...ms.map((m: any) => m.day), 0) + 1 : 1; const params = JSON.stringify(tl); const stepsText = ms.map((m: any) => 'D' + m.day + ': ' + m.label).join('\n'); const { invoke: inv } = await import('@tauri-apps/api/core'); await inv('update_experiment', { id: s.exp.id, title: s.exp.title, type: s.exp.type||'', date: s.exp.date||'', purpose: s.exp.purpose||'', materials: s.exp.materials||'', steps: stepsText, parameters: params, results: s.exp.results||'', conclusion: s.exp.conclusion||'', issues: s.exp.issues||'', nextSteps: s.exp.nextSteps||'', status: s.exp.status||'进行中' }); await useStore.getState().loadAll(); } catch(err) { console.error(err); } }}
+          >删除</div>
+        </div>, document.body)}
       {stepEdit && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 99999 }}>
           <div style={{ background: '#1a1a1f', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 12, padding: 24, minWidth: 360, boxShadow: '0 20px 60px rgba(0,0,0,0.6)' }} onClick={(ev) => ev.stopPropagation()}>
@@ -1772,17 +2143,23 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
             onClick={() => { const exp = ctxMenu.exp; setCtxMenu(null); navigateTo('experimentDetail', { experimentId: exp.id, projectId: exp.projectId }); }}
-          >详情</div>
+          >实验记录</div>
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
             onClick={() => { localStorage.setItem('biolab-edit-exp', JSON.stringify(ctxMenu.exp)); onAction('experiment'); setCtxMenu(null); }}
-          >编辑</div>
+          >修改步骤</div>
+          <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
+            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
+            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
+            onClick={async () => { const exp = ctxMenu.exp; setCtxMenu(null); try { await exportExperimentToWord(exp); } catch(e:any) { console.error('导出失败:', e); } }}
+          >导出文档</div>
+          <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 0' }} />
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
             onClick={async () => { const exp = ctxMenu.exp; setCtxMenu(null); if (await showConfirm('删除实验「' + exp.title + '」？')) { await deleteExperiment(exp.id); await useStore.getState().loadAll(); } }}
-          >删除</div>
+          >删除实验</div>
         </div>
       )}
     </div>
@@ -2197,6 +2574,7 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
   };
   const stepsList = React.useMemo(() => parseSteps(exp?.steps || ''), [exp?.steps]);
   const [editingStep, setEditingStep] = useState<{si:number; field:'day'|'name'|'detail'; val:string}|null>(null);
+  const [addingStep, setAddingStep] = useState<{day:string; name:string; detail:string}|null>(null);
   const commitEditingStep = () => {
     if (!editingStep) return;
     const { si, field, val } = editingStep;
@@ -2319,6 +2697,87 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
     } catch (e: any) { console.error('保存失败:', e); }
   };
 
+
+
+  async function exportWord() {
+    if (!exp) return;
+    try {
+      await exportExperimentToWord(exp);
+      return;
+    } catch (_e) { /* fallthrough to old path intentionally disabled */ }
+    try {
+      const { Document, Packer, Paragraph, HeadingLevel, TextRun } = await import('docx');
+      const { save: saveDialog } = await import('@tauri-apps/plugin-dialog');
+      const { invoke: inv } = await import('@tauri-apps/api/core');
+
+      const children: any[] = [
+        new Paragraph({ children: [new TextRun({ text: exp.title, bold: true, size: 36, font: 'PingFang SC' })], spacing: { after: 100 } }),
+        new Paragraph({ children: [new TextRun({ text: (exp.date || '') + ' · ' + (exp.type || ''), size: 20, color: '888888', font: 'PingFang SC' })], spacing: { after: 300 } }),
+      ];
+
+      const pushHeading = (title: string) => {
+        children.push(new Paragraph({ text: title, heading: HeadingLevel.HEADING_2, spacing: { before: 300, after: 100 } }));
+      };
+      const pushTextBlock = (text: string) => {
+        for (const line of text.split('\n')) {
+          children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22, font: 'PingFang SC' })], spacing: { after: 60, line: 360 } }));
+        }
+      };
+      const pushSection = (title: string, text: string) => {
+        if (!text || !text.trim()) return;
+        pushHeading(title);
+        pushTextBlock(text);
+      };
+
+      pushSection('实验目的', exp.purpose || '');
+      pushSection('样本材料', exp.materials || '');
+
+      // 实验步骤:从 parameters.milestones 取 day+label+detail,按天数排序
+      let milestones: any[] = [];
+      try {
+        const tl = JSON.parse(exp.parameters || '{}');
+        milestones = Array.isArray(tl.milestones) ? tl.milestones : [];
+      } catch {}
+      const sortedMs = [...milestones].sort((a: any, b: any) => (a.day ?? 0) - (b.day ?? 0));
+      if (sortedMs.length > 0) {
+        pushHeading('实验步骤');
+        for (const m of sortedMs) {
+          const stepTitle = 'D' + (m.day ?? 0) + ' · ' + (m.label || '');
+          children.push(new Paragraph({ children: [new TextRun({ text: stepTitle, bold: true, size: 24, font: 'PingFang SC' })], spacing: { before: 120, after: 60 } }));
+          const detail = (m.detail || '').trim();
+          if (detail) {
+            for (const line of detail.split('\n')) {
+              children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22, font: 'PingFang SC' })], spacing: { after: 60, line: 360 }, indent: { left: 360 } }));
+            }
+          }
+        }
+      } else if (exp.steps && exp.steps.trim()) {
+        pushSection('实验步骤', exp.steps);
+      }
+
+      pushSection('实验结果', exp.results || '');
+      pushSection('结论', exp.conclusion || '');
+      pushSection('问题记录', exp.issues || '');
+      pushSection('下一步计划', exp.nextSteps || '');
+
+      const doc = new Document({ sections: [{ children }] });
+      const blob = await Packer.toBlob(doc);
+
+      const savePath = await saveDialog({ defaultPath: exp.title + '.docx', filters: [{ name: 'Word', extensions: ['docx'] }] });
+      if (!savePath) return;
+
+      const arrayBuf = await blob.arrayBuffer();
+      const bytes = new Uint8Array(arrayBuf);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+      const base64 = btoa(binary);
+
+      await inv('write_export_file', { path: savePath, data: base64 });
+    } catch (e: any) {
+      console.error('导出Word失败:', e);
+    }
+  }
+
   const sections = [
     { key: 'purpose', label: '实验目的', icon: '◎', content: exp.purpose },
     { key: 'materials', label: '样本材料', icon: '◈', content: exp.materials },
@@ -2330,15 +2789,16 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
   ];
 
   const EditBlock = ({ field, content }: { field: string; content?: string }) => {
-    if (editing === field) {
-      return <textarea className="exp-edit-textarea" defaultValue={content || ''} autoFocus
-        onBlur={(ev) => { const val = ev.target.value; setEditing(null); if (val !== (content || '')) doSave(field, val); }}
-        onKeyDown={e => { if (e.key === 'Escape') setEditing(null); }} />;
-    }
     return (
-      <div className="exp-content-block" onClick={() => setEditing(field)}>
-        {content ? <div className="exp-content-text">{content}</div> : <div className="exp-content-empty">&nbsp;</div>}
-      </div>
+      <textarea
+        className="exp-edit-textarea exp-edit-inline"
+        key={`${field}-${content || ''}`}
+        defaultValue={content || ''}
+        placeholder="点击输入"
+        ref={(el) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+        onInput={(ev) => { const el = ev.currentTarget; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }}
+        onBlur={(ev) => { const val = ev.target.value; if (val !== (content || '')) doSave(field, val); }}
+      />
     );
   };
 
@@ -2351,13 +2811,13 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
       {/* Header */}
       <div className="exp-detail-header">
         <div className="flex-1">
-          <h1 className="page-title" style={{ cursor: 'text' }} onClick={async () => { const newTitle = await showPrompt('修改实验名称', exp.title); if (newTitle && newTitle !== exp.title) { try { const { invoke: inv } = await import('@tauri-apps/api/core'); await inv('update_experiment', { id: exp.id, title: newTitle, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: exp.steps||'', parameters: exp.parameters||'', results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' }); await useStore.getState().loadAll(); } catch(err) { console.error(err); } } }}>{exp.title}</h1>
+          <h1 className="page-title">{exp.title}</h1>
           <div className="flex items-center gap-2 mt-2">
             <span className="text-xs muted"><Calendar size={12} /> {formatDate(exp.date)} · {exp.type}</span>
             {proj && <span className="text-xs muted">· {proj.name}</span>}
           </div>
         </div>
-        
+        <button className="btn" onClick={() => exportWord()}>导出</button>
 
       </div>
 
@@ -2388,68 +2848,91 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
               {activeSec.key === 'steps' ? (() => {
                 return (
                   <div>
-                    {stepsList.map((step, si) => (
-                      <div key={si} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, padding: '8px 0', borderBottom: si < stepsList.length - 1 ? '1px solid rgba(255,255,255,0.03)' : 'none' }}>
-                        {editingStep && editingStep.si === si && editingStep.field === 'day' ? (
-                          <span style={{ minWidth: 36, display: 'inline-flex', alignItems: 'center', gap: 2 }}>
-                            <span style={{ color: '#7dd3fc', fontSize: 12, fontWeight: 600 }}>D</span>
-                            <input autoFocus type="text" inputMode="numeric" value={editingStep.val}
-                              onChange={ev => setEditingStep({ ...editingStep, val: ev.target.value.replace(/[^0-9]/g, '') })}
-                              onBlur={commitEditingStep}
-                              onKeyDown={ev => { if (ev.key === 'Enter') commitEditingStep(); if (ev.key === 'Escape') setEditingStep(null); }}
-                              style={{ width: 30, padding: '2px 4px', background: '#0f0f12', border: '1px solid #7dd3fc', borderRadius: 4, color: '#7dd3fc', fontSize: 12, outline: 'none', fontWeight: 600, fontFamily: 'inherit' }} />
-                          </span>
-                        ) : (
-                          <span style={{ fontSize: 12, color: '#7dd3fc', minWidth: 36, fontVariantNumeric: 'tabular-nums', cursor: 'pointer', padding: '4px 6px', borderRadius: 4, transition: 'all 0.15s', fontWeight: 600 }}
-                            onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.08)'; ev.currentTarget.style.textDecoration = 'underline'; }}
-                            onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.textDecoration = 'none'; }}
-                            onClick={() => setEditingStep({ si, field: 'day', val: String(step.day) })}
-                          >{si > 0 && stepsList[si-1].day === step.day ? '' : 'D' + step.day}</span>
-                        )}
-                        <div style={{ flex: 1 }}>
-                          {editingStep && editingStep.si === si && editingStep.field === 'name' ? (
-                            <input autoFocus type="text" value={editingStep.val}
-                              onChange={ev => setEditingStep({ ...editingStep, val: ev.target.value })}
-                              onBlur={commitEditingStep}
-                              onKeyDown={ev => { if (ev.key === 'Enter') commitEditingStep(); if (ev.key === 'Escape') setEditingStep(null); }}
-                              style={{ width: '100%', padding: '2px 6px', background: '#0f0f12', border: '1px solid #7dd3fc', borderRadius: 4, color: '#f0f0f2', fontSize: 13, outline: 'none', fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box' }} />
+                    {stepsList.map((step, si) => {
+                      const sameDayAsPrev = si > 0 && stepsList[si-1].day === step.day;
+                      const isLast = si === stepsList.length - 1;
+                      return (
+                      <div key={si} style={{ display: 'flex', alignItems: 'flex-start', gap: 0, marginBottom: 8 }}>
+                        <div style={{ width: 42, display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, visibility: sameDayAsPrev ? 'hidden' : 'visible' }}>
+                          {editingStep && editingStep.si === si && editingStep.field === 'day' ? (
+                            <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(125,211,252,0.2)', border: '1px solid #7dd3fc', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                              <input autoFocus type="text" inputMode="numeric" value={editingStep.val}
+                                onChange={ev => setEditingStep({ ...editingStep, val: ev.target.value.replace(/[^0-9]/g, '') })}
+                                onBlur={commitEditingStep}
+                                onKeyDown={ev => { if (ev.key === 'Enter') commitEditingStep(); if (ev.key === 'Escape') setEditingStep(null); }}
+                                style={{ width: 24, background: 'transparent', border: 'none', color: '#7dd3fc', fontSize: 13, outline: 'none', fontWeight: 700, fontFamily: 'inherit', textAlign: 'center', padding: 0 }} />
+                            </div>
                           ) : (
-                            <div style={{ fontSize: 13, color: '#f0f0f2', cursor: 'pointer', padding: '2px 6px', borderRadius: 4, transition: 'all 0.15s', fontWeight: 500 }}
-                              onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(255,255,255,0.03)'; ev.currentTarget.style.textDecoration = 'underline dashed rgba(255,255,255,0.2)'; }}
-                              onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.textDecoration = 'none'; }}
-                              onClick={() => setEditingStep({ si, field: 'name', val: step.name })}
-                            >{step.name}</div>
+                            <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(125,211,252,0.12)', border: '1px solid rgba(125,211,252,0.25)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', transition: 'all 0.15s' }}
+                              onClick={() => setEditingStep({ si, field: 'day', val: String(step.day) })}
+                              onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.2)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.5)'; }}
+                              onMouseLeave={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.25)'; }}>
+                              <span style={{ fontSize: 11, fontWeight: 700, color: '#7dd3fc' }}>D{step.day}</span>
+                            </div>
                           )}
-                          {editingStep && editingStep.si === si && editingStep.field === 'detail' ? (
-                            <textarea autoFocus value={editingStep.val}
-                              onChange={ev => setEditingStep({ ...editingStep, val: ev.target.value })}
-                              onBlur={commitEditingStep}
-                              onKeyDown={ev => { if (ev.key === 'Enter' && (ev.metaKey || ev.ctrlKey)) commitEditingStep(); if (ev.key === 'Escape') setEditingStep(null); }}
-                              style={{ width: '100%', minHeight: 50, padding: '4px 6px', background: '#0f0f12', border: '1px solid #7dd3fc', borderRadius: 4, color: '#d0d4dc', fontSize: 11, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', resize: 'vertical' }} />
-                          ) : step.detail ? (<div style={{ fontSize: 11, color: '#d0d4dc', padding: '2px 6px', cursor: 'pointer', transition: 'all 0.15s', borderRadius: 4 }}
-                            onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
-                            onMouseLeave={ev => { ev.currentTarget.style.background = 'transparent'; }}
-                            onClick={() => setEditingStep({ si, field: 'detail', val: step.detail })}
-                          >{step.detail}</div>) : null}
+                          {!isLast && <div style={{ width: 1.5, flex: 1, minHeight: 12, background: 'rgba(125,211,252,0.12)', marginTop: 4 }} />}
                         </div>
-                        <span style={{ fontSize: 12, color: '#d0d4dc', cursor: 'pointer', padding: '2px 6px', opacity: 0.3, transition: 'all 0.2s' }}
-                          onMouseEnter={ev => { ev.currentTarget.style.opacity = '1'; ev.currentTarget.style.color = '#fc8181'; }}
-                          onMouseLeave={ev => { ev.currentTarget.style.opacity = '0.3'; ev.currentTarget.style.color = '#d0d4dc'; }}
-                          onClick={async () => { const ns = stepsList.filter((_, i) => i !== si); saveSteps(ns); }}
-                        >✕</span>
+                        <div style={{ flex: 1, padding: '10px 14px', borderRadius: 10, background: '#222225', marginLeft: 8, border: '1px solid rgba(255,255,255,0.04)', position: 'relative', transition: 'border 0.2s' }}
+                          onMouseEnter={ev => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.15)'; const del = ev.currentTarget.querySelector('[data-step-del]') as HTMLElement; if (del) del.style.opacity = '1'; }}
+                          onMouseLeave={ev => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; const del = ev.currentTarget.querySelector('[data-step-del]') as HTMLElement; if (del) del.style.opacity = '0'; }}>
+                          <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>步骤标题</div>
+                          <input value={step.name} onChange={ev => { const ns = [...stepsList]; ns[si] = { ...ns[si], name: ev.target.value }; saveSteps(ns); }}
+                            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                          <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '6px 0' }} />
+                          <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>具体操作</div>
+                          <textarea value={step.detail || ''} onChange={ev => { const ns = [...stepsList]; ns[si] = { ...ns[si], detail: ev.target.value }; saveSteps(ns); }}
+                            rows={1} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
+                            onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                            ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                          <div data-step-del="" style={{ position: 'absolute', top: '50%', right: 10, transform: 'translateY(-50%)', width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0, transition: 'all 0.2s', color: '#d0d4dc', fontSize: 14, background: 'rgba(252,129,129,0.08)', border: '1px solid rgba(252,129,129,0.2)' }}
+                            onClick={() => { const ns = stepsList.filter((_: any, i: number) => i !== si); saveSteps(ns); }}
+                            onMouseEnter={ev => { ev.currentTarget.style.color = '#fc8181'; ev.currentTarget.style.background = 'rgba(252,129,129,0.18)'; ev.currentTarget.style.borderColor = '#fc8181'; }}
+                            onMouseLeave={ev => { ev.currentTarget.style.color = '#d0d4dc'; ev.currentTarget.style.background = 'rgba(252,129,129,0.08)'; ev.currentTarget.style.borderColor = 'rgba(252,129,129,0.2)'; }}>✕</div>
+                        </div>
                       </div>
-                    ))}
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 0', cursor: 'pointer', opacity: 0.4, transition: 'opacity 0.2s' }}
+                      );
+                    })}
+                    {addingStep && (
+                      <div style={{ display: 'flex', alignItems: 'flex-start', gap: 0, marginBottom: 8 }}>
+                        <div style={{ width: 42, display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0 }}>
+                          <div style={{ width: 34, height: 34, borderRadius: '50%', border: '1.5px dashed rgba(125,211,252,0.4)', background: 'transparent', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <input type="text" inputMode="numeric" value={addingStep.day}
+                              onChange={ev => setAddingStep({ ...addingStep, day: ev.target.value.replace(/[^0-9]/g, '') })}
+                              style={{ width: 24, background: 'transparent', border: 'none', outline: 'none', color: '#7dd3fc', fontSize: 13, fontWeight: 700, fontFamily: 'inherit', textAlign: 'center', padding: 0 }} />
+                          </div>
+                        </div>
+                        <div style={{ flex: 1, padding: '10px 14px', borderRadius: 10, background: '#222225', marginLeft: 8, border: '1px dashed rgba(125,211,252,0.3)' }}>
+                          <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>步骤标题</div>
+                          <input autoFocus value={addingStep.name} onChange={ev => setAddingStep({ ...addingStep, name: ev.target.value })}
+                            onKeyDown={ev => { if (ev.key === 'Escape') setAddingStep(null); }}
+                            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                          <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '6px 0' }} />
+                          <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>具体操作</div>
+                          <textarea value={addingStep.detail} onChange={ev => setAddingStep({ ...addingStep, detail: ev.target.value })}
+                            rows={1} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
+                            onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                            ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
+                          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
+                            <button onClick={() => setAddingStep(null)} style={{ padding: '5px 14px', background: 'transparent', border: '1px solid rgba(255,255,255,0.12)', borderRadius: 4, color: '#d0d4dc', fontSize: 12, cursor: 'pointer', fontFamily: 'inherit' }}>取消</button>
+                            <button onClick={() => { const d = parseInt(addingStep.day); if (isNaN(d) || !addingStep.name.trim()) return; const ns = [...stepsList, { day: d, name: addingStep.name.trim(), detail: addingStep.detail.trim() }]; ns.sort((a: any, b: any) => a.day - b.day); saveSteps(ns); setAddingStep(null); }} style={{ padding: '5px 14px', background: '#7dd3fc', border: 'none', borderRadius: 4, color: '#0f0f12', fontSize: 12, fontWeight: 600, cursor: 'pointer', fontFamily: 'inherit' }}>保存</button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {!addingStep && (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 0, padding: '4px 0', cursor: 'pointer', opacity: 0.4, transition: 'opacity 0.2s' }}
                       onMouseEnter={ev => ev.currentTarget.style.opacity = '1'}
                       onMouseLeave={ev => ev.currentTarget.style.opacity = '0.4'}
                       onClick={() => {
                         const nextDay = String(stepsList.length > 0 ? stepsList[stepsList.length-1].day + 1 : 0);
-                        setStepEdit2({ mi: -1, day: nextDay, name: '', detail: '' });
-                      }}
-                    >
-                      <div style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px dashed #3a3a40' }} />
-                      <span style={{ fontSize: 12, color: '#d0d4dc' }}>添加步骤</span>
+                        setAddingStep({ day: nextDay, name: '', detail: '' });
+                      }}>
+                      <div style={{ width: 42, display: 'flex', justifyContent: 'center', flexShrink: 0 }}>
+                        <div style={{ width: 34, height: 34, borderRadius: '50%', border: '1.5px dashed #3a3a40', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d0d4dc', fontSize: 14, transition: 'all 0.2s' }}>+</div>
+                      </div>
+                      <span style={{ fontSize: 12, color: '#d0d4dc', marginLeft: 8 }}>添加步骤</span>
                     </div>
+                    )}
                   </div>
                 );
               })() : activeSec.key !== 'refs' && <EditBlock field={activeSec.key} content={activeSec.content} />}
@@ -2744,12 +3227,23 @@ function ExperimentsPage({ onAction }: { onAction: (t: string) => void }) {
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
             onClick={() => { const exp = expCtxMenu.exp; setExpCtxMenu(null); navigateTo('experimentDetail', { experimentId: exp.id, projectId: exp.projectId }); }}
-          >详情</div>
+          >实验记录</div>
+          <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
+            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
+            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
+            onClick={() => { localStorage.setItem('biolab-edit-exp', JSON.stringify(expCtxMenu.exp)); onAction('experiment'); setExpCtxMenu(null); }}
+          >修改步骤</div>
+          <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
+            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
+            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
+            onClick={async () => { const exp = expCtxMenu.exp; setExpCtxMenu(null); try { await exportExperimentToWord(exp); } catch(e:any) { console.error('导出失败:', e); } }}
+          >导出文档</div>
+          <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 0' }} />
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
             onClick={async () => { const exp = expCtxMenu.exp; setExpCtxMenu(null); if (await showConfirm('删除实验「' + exp.title + '」？')) { await deleteExperiment(exp.id); await useStore.getState().loadAll(); } }}
-          >删除</div>
+          >删除实验</div>
         </div>, document.body)}
       {experiments.length === 0 && (
         <div className="card" style={{ marginTop: 12, textAlign: 'center', padding: 30, cursor: 'pointer', transition: 'all 0.25s' }}
@@ -2956,20 +3450,6 @@ function LibraryPage({ onAction }: { onAction: (t: string) => void }) {
 }
 
 function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => void }) {
-  const [selectedCat, setSelectedCat] = useState<string | null>(null);
-
-  const categories = [
-    { key: '动物实验', icon: '🐭', methods: ['皮下荷瘤模型', '原位荷瘤模型', '药效评价(肿瘤)', 'PK/PD药代动力学', '毒理学评价', '给药方案执行', '活体成像(IVIS)', '生存期观察', '组织取材', '体重监测'] },
-    { key: '细胞实验', icon: '🔬', methods: ['细胞培养与传代', '细胞转染/转导', 'CCK-8增殖检测', 'MTT增殖检测', '细胞凋亡检测', '细胞周期分析', 'Transwell迁移', 'Transwell侵袭', '克隆形成实验', '慢病毒包装', '腺病毒包装', '细胞划痕实验'] },
-    { key: '分子实验', icon: '🧬', methods: ['PCR', 'qPCR/RT-qPCR', '基因克隆', '质粒构建', 'CRISPR基因编辑', 'RNA提取', '逆转录(cDNA)', '核酸电泳', 'Southern blot', 'Northern blot', '基因测序'] },
-    { key: '蛋白实验', icon: '🧪', methods: ['Western blot', '免疫共沉淀(Co-IP)', '蛋白纯化', 'SDS-PAGE电泳', 'ELISA', '质谱分析', 'Pull-down', '蛋白定量(BCA/Bradford)', '2D电泳'] },
-    { key: '免疫染色', icon: '🎨', methods: ['免疫荧光(IF)', '免疫组化(IHC)', 'HE染色', 'Masson染色', 'PAS染色', '油红O染色', 'TUNEL凋亡检测', '多重免疫荧光', '原位杂交(ISH/FISH)'] },
-    { key: '流式检测', icon: '💧', methods: ['表面标记检测', '胞内因子染色', '细胞分选(FACS)', '凋亡检测(Annexin V)', '细胞周期(PI)', 'CFSE增殖检测', 'ELISPOT', '多色流式Panel设计', 'CBA细胞因子检测'] },
-    { key: '组学分析', icon: '📊', methods: ['转录组测序(RNA-seq)', '单细胞测序(scRNA-seq)', '蛋白组学(TMT)', '蛋白组学(Label-free)', '代谢组学', 'ATAC-seq', 'ChIP-seq', '空间转录组', '全外显子测序(WES)', '16S菌群测序'] },
-    { key: '药学实验', icon: '💊', methods: ['IC50药物筛选', '药物联合指数(CI)', '药代动力学(ADME)', '制剂稳定性测试', '纳米粒制备', '脂质体制备', '药物释放曲线', '溶血实验', '药物溶解度测定'] },
-    { key: '病理实验', icon: '🔍', methods: ['组织切片制备', '石蜡包埋', '冰冻切片', 'HE染色', '特殊染色', '病理评分', '组织芯片(TMA)', '透射电镜(TEM)', '扫描电镜(SEM)'] },
-    { key: '生信分析', icon: '💻', methods: ['差异基因分析(DEG)', 'GO富集分析', 'KEGG通路分析', 'GSEA分析', '生存分析(K-M)', '免疫浸润分析', 'WGCNA分析', '突变分析', '分子对接', 'PPI蛋白互作网络', '单细胞分析(Seurat)'] },
-  ];
 
   const [userTemplates, setUserTemplates] = useState<any[]>(() => {
     try { return JSON.parse(localStorage.getItem('biolab-user-templates') || '[]'); } catch { return []; }
@@ -2983,7 +3463,6 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
   }, []);
   const [tplCtxMenu, setTplCtxMenu] = useState<{x:number;y:number;tpl:any}|null>(null);
   const [tplSearch, setTplSearch] = useState('');
-  const [methodSearch, setMethodSearch] = useState('');
   React.useEffect(() => { if (!tplCtxMenu) return; const cl = () => setTplCtxMenu(null); const t = setTimeout(() => { window.addEventListener('click', cl); window.addEventListener('scroll', cl, true); }, 0); return () => { clearTimeout(t); window.removeEventListener('click', cl); window.removeEventListener('scroll', cl, true); }; }, [tplCtxMenu]);
 
   const deleteTemplate = (id: string) => {
@@ -2993,121 +3472,12 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
   };
 
 
-  // ── Sub-page: category detail ──
-  if (selectedCat) {
-    const cat = categories.find(c => c.key === selectedCat)!;
-    return (
-      <div className="page-container">
-        {/* Back header */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20, cursor: 'pointer' }} onClick={() => setSelectedCat(null)}>
-          <div style={{
-            width: 32, height: 32, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-            background: 'rgba(125,211,252,0.08)', border: '1px solid rgba(125,211,252,0.15)', transition: 'all 0.2s',
-          }}
-            onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.15)'; }}
-            onMouseLeave={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.08)'; }}
-          >
-            <svg width="14" height="14" viewBox="0 0 16 16" fill="none"><path d="M10 4l-4 4 4 4" stroke="#7dd3fc" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-          </div>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 700, color: '#f0f0f2', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 22 }}>{cat.icon}</span> {cat.key}
-            </div>
-            <div style={{ fontSize: 12, color: '#d0d4dc' }}>{cat.methods.length} 种实验方法</div>
-          </div>
-        </div>
-
-        {/* Methods grid */}
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {cat.methods.map((m, mi) => (
-            <div key={mi} style={{
-              padding: '12px 16px', borderRadius: 10, cursor: 'pointer',
-              background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
-              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-              transition: 'all 0.2s',
-            }}
-              onMouseEnter={ev => {
-                ev.currentTarget.style.background = 'rgba(125,211,252,0.06)';
-                ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.2)';
-                ev.currentTarget.style.boxShadow = '0 0 20px rgba(125,211,252,0.08)';
-                ev.currentTarget.style.transform = 'translateX(4px)';
-              }}
-              onMouseLeave={ev => {
-                ev.currentTarget.style.background = 'rgba(255,255,255,0.02)';
-                ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.05)';
-                ev.currentTarget.style.boxShadow = 'none';
-                ev.currentTarget.style.transform = 'translateX(0)';
-              }}
-              onClick={() => onSelectTemplate({ id: cat.key + '-' + mi, name: m, fields: { type: cat.key } })}
-            >
-              <span style={{ fontSize: 14, fontWeight: 500, color: '#e0e0e5' }}>{m}</span>
-              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" style={{ opacity: 0.3, flexShrink: 0 }}><path d="M6 4l4 4-4 4" stroke="#fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
-  // ── Main grid view ──
+  // ── Main view ──
   return (
     <div className="page-container">
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12 }}>
-        <div className="page-title">方法</div>
-        <div style={{ position: 'relative', flex: '0 1 280px' }}>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d0d4dc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-          <input type="text" value={methodSearch} onChange={e => setMethodSearch(e.target.value)} placeholder="搜索方法"
-            style={{ width: '100%', padding: '7px 10px 7px 30px', borderRadius: 6, background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.08)', color: '#f1f5f9', fontSize: 12, outline: 'none', fontFamily: 'inherit', boxSizing: 'border-box', transition: 'border 0.2s' }}
-            onFocus={e => e.target.style.borderColor = 'rgba(125,211,252,0.35)'}
-            onBlur={e => e.target.style.borderColor = 'rgba(255,255,255,0.08)'}
-          />
-        </div>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, marginBottom: 28 }}>
-        {categories.filter(cat => {
-          const q = methodSearch.trim().toLowerCase();
-          if (!q) return true;
-          if (cat.key.toLowerCase().includes(q)) return true;
-          return cat.methods.some(m => m.toLowerCase().includes(q));
-        }).map((cat, ci) => (
-          <div key={cat.key} onClick={() => setSelectedCat(cat.key)} style={{
-            borderRadius: 14, padding: '20px 8px 16px', textAlign: 'center', cursor: 'pointer',
-            background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.06)',
-            transition: 'all 0.35s ease', position: 'relative', overflow: 'hidden',
-          }}
-            onMouseEnter={ev => {
-              ev.currentTarget.style.background = 'rgba(125,211,252,0.06)';
-              ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.4)';
-              ev.currentTarget.style.boxShadow = '0 0 30px rgba(125,211,252,0.12), inset 0 0 30px rgba(125,211,252,0.03)';
-              ev.currentTarget.style.transform = 'translateY(-3px) scale(1.02)';
-            }}
-            onMouseLeave={ev => {
-              ev.currentTarget.style.background = 'rgba(255,255,255,0.02)';
-              ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.06)';
-              ev.currentTarget.style.boxShadow = 'none';
-              ev.currentTarget.style.transform = 'translateY(0) scale(1)';
-            }}
-          >
-            <div style={{ fontSize: 28, marginBottom: 8, filter: 'saturate(0.85)', transition: 'transform 0.3s' }}>{cat.icon}</div>
-            <div style={{ fontSize: 13, fontWeight: 600, color: '#e0e0e5', marginBottom: 3 }}>{cat.key}</div>
-            <div style={{ fontSize: 11, color: '#d0d4dc' }}>{cat.methods.length} 种方法</div>
-          </div>
-        ))}
-      </div>
-      {methodSearch.trim() && categories.filter(cat => {
-        const q = methodSearch.trim().toLowerCase();
-        return cat.key.toLowerCase().includes(q) || cat.methods.some(m => m.toLowerCase().includes(q));
-      }).length === 0 && (
-        <div style={{ padding: '32px 0 28px', textAlign: 'center', color: '#d0d4dc', fontSize: 13, marginBottom: 28 }}>
-          未找到与「{methodSearch}」相关的方法
-        </div>
-      )}
-
-      {/* Literature templates */}
-      <div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10, gap: 12 }}>
-          <div style={{ fontSize: 24, fontWeight: 800, color: '#7dd3fc', letterSpacing: '-0.02em' }}>模板</div>
+            <div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 20, gap: 12 }}>
+          <div className="page-title">模板</div>
           <div style={{ position: 'relative', flex: '0 1 280px' }}>
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#d0d4dc" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ position: 'absolute', left: 10, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
             <input type="text" value={tplSearch} onChange={e => setTplSearch(e.target.value)} placeholder="搜索模板"
@@ -3148,7 +3518,7 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
               >
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 14, fontWeight: 500, color: '#d0d0d5' }}>{lt.name}</div>
-                  <div style={{ fontSize: 10, color: '#8890a0', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{lt.desc}</div>
+                  <div style={{ fontSize: 10, color: '#8890a0', marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{(lt.steps && lt.steps.length) ? [...lt.steps].filter((s: any) => s && s.name && s.name.trim()).sort((a: any, b: any) => (a.day ?? 0) - (b.day ?? 0)).map((s: any) => 'D' + (s.day ?? 0) + ' ' + s.name).join(' → ') : (lt.desc || '')}</div>
                 </div>
                 <div style={{ fontSize: 11, color: '#7dd3fc', background: 'rgba(125,211,252,0.08)', padding: '3px 10px', borderRadius: 8, fontWeight: 500, whiteSpace: 'nowrap', flexShrink: 0 }}>
                   {lt.steps?.length || 0} 步骤
@@ -3164,12 +3534,17 @@ function TemplatesPage({ onSelectTemplate }: { onSelectTemplate: (t: any) => voi
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
             onClick={() => { const lt = tplCtxMenu.tpl; setTplCtxMenu(null); localStorage.setItem('biolab-edit-tpl', JSON.stringify(lt)); onSelectTemplate({ id: lt.id, name: lt.name, fields: { type: lt.cat }, steps: lt.steps }); }}
-          >编辑</div>
+          >修改模板</div>
+          <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
+            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
+            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
+            onClick={async () => { const lt = tplCtxMenu.tpl; setTplCtxMenu(null); try { await exportTemplateToWord(lt); } catch(e:any) { console.error('导出模板失败:', e); } }}
+          >导出模板</div>
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
             onClick={async () => { const lt = tplCtxMenu.tpl; setTplCtxMenu(null); if (await showConfirm('删除模板「' + lt.name + '」？')) deleteTemplate(lt.id); }}
-          >删除</div>
+          >删除模板</div>
         </div>, document.body)}
     </div>
   );
@@ -3244,7 +3619,7 @@ function SettingsPage({ bgEnabled, setBgEnabled }: { bgEnabled: boolean; setBgEn
       </div>
 
       <div className="settings-row">
-        <div><div className="settings-label">关于</div><div className="settings-desc">Lab Data System v0.5.1</div></div>
+        <div><div className="settings-label">关于</div><div className="settings-desc">Lab Data System v{__APP_VERSION__}</div></div>
         <span style={{ color: '#d0d4dc', fontSize: 18 }}>›</span>
       </div>
       <div className="settings-row" onClick={async () => {
@@ -3463,7 +3838,7 @@ function UserMenu({ onLogout, userName, avatarUrl, bgEnabled, setBgEnabled }: { 
           setOpen(false);
         }}>注销账号</div>
         <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 6px' }} />
-        <div style={{ padding: '6px 14px', fontSize: 11, color: '#606068' }}>v0.5.1</div>
+        <div style={{ padding: '6px 14px', fontSize: 11, color: '#606068' }}>v{__APP_VERSION__}</div>
       </div>}
 
     </div>
@@ -3530,7 +3905,7 @@ export default function App() {
   const navTabs = [
     { key: 'projects', label: '课题', icon: <FolderOpen size={15} /> },
     { key: 'experiments', label: '实验记录', icon: <FlaskConical size={15} /> },
-    { key: 'templates', label: '方法', icon: <LayoutTemplate size={15} /> },
+    { key: 'templates', label: '模板', icon: <LayoutTemplate size={15} /> },
     { key: 'library', label: '文献', icon: <BookOpen size={15} /> },
   ];
 
