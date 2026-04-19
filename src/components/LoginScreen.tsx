@@ -9,7 +9,6 @@ export function LoginScreen({ onLoginSuccess }: Props) {
   const [mode, setMode] = useState<'checking' | 'login' | 'register'>('checking');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const [displayName, setDisplayName] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
@@ -67,7 +66,7 @@ export function LoginScreen({ onLoginSuccess }: Props) {
     if (password.length < 4) { setError('密码至少4位'); return; }
     setLoading(true); setError('');
     try {
-      await invoke('register_user', { username, password, displayName: displayName || username });
+      await invoke('register_user', { username, password, displayName: username });
       if (dataDir) await invoke('set_custom_data_dir', { path: dataDir });
       onLoginSuccess(username);
     } catch (e: any) { setError(e.toString()); }
@@ -90,7 +89,7 @@ export function LoginScreen({ onLoginSuccess }: Props) {
     <div style={s.container}>
       {mode === 'register' && (
         <button
-          onClick={() => { setMode('login'); setError(''); setConfirmPassword(''); setDisplayName(''); }}
+          onClick={() => { setMode('login'); setError(''); setConfirmPassword(''); }}
           style={{ position: 'fixed', top: 16, left: 16, background: 'rgba(26,31,46,0.85)', backdropFilter: 'blur(8px)', border: '1px solid rgba(125,211,252,0.15)', borderRadius: 6, padding: '6px 14px', color: '#7dd3fc', fontSize: 13, cursor: 'pointer', transition: 'all 0.2s', zIndex: 1000 }}
           onMouseEnter={ev => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.4)'; }}
           onMouseLeave={ev => { ev.currentTarget.style.background = 'rgba(26,31,46,0.85)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.15)'; }}
@@ -110,7 +109,6 @@ export function LoginScreen({ onLoginSuccess }: Props) {
         {mode === 'register' ? (
           <>
             <div style={s.formGroup}><label style={s.label}>用户名</label><input style={s.input} value={username} onChange={e => setUsername(e.target.value)} placeholder="请输入用户名" autoFocus /></div>
-            <div style={s.formGroup}><label style={s.label}>显示名称</label><input style={s.input} value={displayName} onChange={e => setDisplayName(e.target.value)} placeholder="可选" /></div>
             <div style={s.formGroup}><label style={s.label}>密码</label><input type="password" style={s.input} value={password} onChange={e => setPassword(e.target.value)} placeholder="至少4位" /></div>
             <div style={s.formGroup}><label style={s.label}>确认密码</label><input type="password" style={s.input} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)} placeholder="再次输入" onKeyDown={e => e.key === 'Enter' && handleRegister()} /></div>
             <div style={s.formGroup}>

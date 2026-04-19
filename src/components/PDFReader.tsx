@@ -67,6 +67,17 @@ export function PDFReader({ filePath, title, onClose }: Props) {
   const [notes, setNotes] = useState<Note[]>([]);
   const [noteMode, setNoteMode] = useState(false);  // 点击 PDF 会创建便利贴
   const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
+  const [notesPanelOpen, setNotesPanelOpen] = useState(false);
+  const [notesSearchQuery, setNotesSearchQuery] = useState('');
+  const [flashNoteId, setFlashNoteId] = useState<string | null>(null);
+  const flashNoteTimerRef = useRef<any>(null);
+  const jumpToNote = (note: Note) => {
+    const wrapper = pageWrapperRefs.current[note.pageIdx];
+    if (wrapper) wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    setFlashNoteId(note.id);
+    if (flashNoteTimerRef.current) clearTimeout(flashNoteTimerRef.current);
+    flashNoteTimerRef.current = setTimeout(() => setFlashNoteId(null), 1800);
+  };
 
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRefs = useRef<(HTMLCanvasElement | null)[]>([]);
@@ -452,6 +463,48 @@ export function PDFReader({ filePath, title, onClose }: Props) {
           width: 3px; height: 3px; border-radius: 50%; background: #92400e;
         }
         .pdf-note-editor-actions { display: flex; gap: 2px; }
+        @keyframes pdfNoteFlash {
+          0%, 100% { box-shadow: 0 0 0 0 rgba(125,211,252,0); }
+          20% { box-shadow: 0 0 0 6px rgba(125,211,252,0.5), 0 0 20px rgba(125,211,252,0.8); }
+          60% { box-shadow: 0 0 0 3px rgba(125,211,252,0.3), 0 0 12px rgba(125,211,252,0.4); }
+        }
+        .pdf-note-flash { animation: pdfNoteFlash 1.6s ease-out; }
+        .pdf-notes-panel {
+          position: absolute; top: 56px; right: 0; bottom: 0; width: 280px;
+          background: #14181f; border-left: 1px solid rgba(125,211,252,0.1);
+          display: flex; flex-direction: column; z-index: 5;
+          box-shadow: -4px 0 20px rgba(0,0,0,0.3);
+        }
+        .pdf-notes-panel-head {
+          padding: 10px 14px; border-bottom: 1px solid rgba(125,211,252,0.08);
+          flex-shrink: 0;
+        }
+        .pdf-notes-panel-head input {
+          width: 100%; padding: 6px 10px; font-size: 12px;
+          background: #0b0e14; border: 1px solid rgba(125,211,252,0.2);
+          border-radius: 6px; color: #f1f5f9; outline: none; box-sizing: border-box;
+        }
+        .pdf-notes-panel-head input:focus { border-color: rgba(125,211,252,0.5); }
+        .pdf-notes-panel-body { flex: 1; overflow-y: auto; padding: 4px 0; }
+        .pdf-notes-panel-item {
+          padding: 10px 14px; cursor: pointer;
+          border-bottom: 1px solid rgba(255,255,255,0.03);
+          transition: background 0.15s;
+        }
+        .pdf-notes-panel-item:hover { background: rgba(125,211,252,0.06); }
+        .pdf-notes-panel-item-meta {
+          font-size: 10px; color: #606878; margin-bottom: 3px;
+          font-variant-numeric: tabular-nums;
+        }
+        .pdf-notes-panel-item-text {
+          font-size: 12px; color: #d0d4dc; line-height: 1.45;
+          display: -webkit-box; -webkit-line-clamp: 3;
+          -webkit-box-orient: vertical; overflow: hidden;
+        }
+        .pdf-notes-panel-empty {
+          padding: 30px 14px; text-align: center;
+          color: #606878; font-size: 12px;
+        }
         .pdf-note-btn {
           background: transparent; border: none; cursor: pointer;
           padding: 2px; display: flex; align-items: center;
@@ -477,6 +530,24 @@ export function PDFReader({ filePath, title, onClose }: Props) {
             <line x1="8" y1="13" x2="14" y2="13"/>
             <line x1="8" y1="17" x2="12" y2="17"/>
           </svg>
+        </div>
+
+        {/* Notes panel toggle */}
+        <div onClick={() => setNotesPanelOpen(v => !v)} title={notesPanelOpen ? '关闭便签面板' : '便签列表 / 搜索'}
+          style={iconBtn(notesPanelOpen)}
+          onMouseEnter={e => { e.currentTarget.style.color = '#a5e4ff'; e.currentTarget.style.transform = 'scale(1.1)'; }}
+          onMouseLeave={e => { e.currentTarget.style.color = notesPanelOpen ? '#a5e4ff' : '#7dd3fc'; e.currentTarget.style.transform = 'scale(1)'; }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="8" y1="6" x2="21" y2="6"/>
+            <line x1="8" y1="12" x2="21" y2="12"/>
+            <line x1="8" y1="18" x2="21" y2="18"/>
+            <line x1="3" y1="6" x2="3.01" y2="6"/>
+            <line x1="3" y1="12" x2="3.01" y2="12"/>
+            <line x1="3" y1="18" x2="3.01" y2="18"/>
+          </svg>
+          {notes.length > 0 && (
+            <span style={{ position: 'absolute', marginLeft: 16, marginTop: -8, minWidth: 14, height: 14, padding: '0 3px', borderRadius: 7, background: '#7dd3fc', color: '#0b0e14', fontSize: 9, fontWeight: 700, display: 'inline-flex', alignItems: 'center', justifyContent: 'center', boxSizing: 'border-box' }}>{notes.length}</span>
+          )}
         </div>
 
         {/* Search toggle */}
@@ -569,7 +640,7 @@ export function PDFReader({ filePath, title, onClose }: Props) {
                 const preview = note.text.trim();
                 const displayText = preview ? (preview.slice(0, 8) + (preview.length > 8 ? '…' : '')) : '空便签';
                 return isEditing ? (
-                  <div key={note.id} className="pdf-note-editor"
+                  <div key={note.id} className={"pdf-note-editor" + (flashNoteId === note.id ? " pdf-note-flash" : "")}
                     style={{ left: `calc(${note.x * 100}% )`, top: `calc(${note.y * 100}% )`, transform: 'translate(-8px, -8px)' }}
                     onClick={e => e.stopPropagation()}
                     onMouseDown={e => e.stopPropagation()}>
@@ -604,7 +675,7 @@ export function PDFReader({ filePath, title, onClose }: Props) {
                     />
                   </div>
                 ) : (
-                  <div key={note.id} className="pdf-note-pin"
+                  <div key={note.id} className={"pdf-note-pin" + (flashNoteId === note.id ? " pdf-note-flash" : "")}
                     style={{ left: `calc(${note.x * 100}% )`, top: `calc(${note.y * 100}% )`, transform: 'translate(-8px, -8px)' }}
                     onClick={e => e.stopPropagation()}
                     onMouseDown={e => { e.preventDefault(); onNoteDragStart(e, note, () => setEditingNoteId(note.id)); }}
@@ -621,6 +692,44 @@ export function PDFReader({ filePath, title, onClose }: Props) {
           ))
         )}
       </div>
+
+      {notesPanelOpen && (
+        <div className="pdf-notes-panel" onClick={e => e.stopPropagation()}>
+          <div className="pdf-notes-panel-head">
+            <input
+              autoFocus
+              value={notesSearchQuery}
+              onChange={e => setNotesSearchQuery(e.target.value)}
+              placeholder={`搜便签文本 / 页码 (共 ${notes.length} 条)`}
+            />
+          </div>
+          <div className="pdf-notes-panel-body">
+            {(() => {
+              const q = notesSearchQuery.trim().toLowerCase();
+              const filtered = notes.filter(n => {
+                if (!q) return true;
+                const textHit = (n.text || '').toLowerCase().includes(q);
+                const pageHit = String(n.pageIdx + 1).includes(q);
+                return textHit || pageHit;
+              });
+              const sorted = [...filtered].sort((a, b) => a.pageIdx - b.pageIdx);
+              if (sorted.length === 0) {
+                return <div className="pdf-notes-panel-empty">{notes.length === 0 ? '还没有便签' : '无匹配结果'}</div>;
+              }
+              return sorted.map(note => {
+                const preview = (note.text || '').trim() || '空便签';
+                return (
+                  <div key={note.id} className="pdf-notes-panel-item"
+                    onClick={() => jumpToNote(note)}>
+                    <div className="pdf-notes-panel-item-meta">第 {note.pageIdx + 1} 页</div>
+                    <div className="pdf-notes-panel-item-text">{preview}</div>
+                  </div>
+                );
+              });
+            })()}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

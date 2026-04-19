@@ -46,6 +46,7 @@ button, [role="button"], .clickable { cursor: pointer; }
   --topbar-h: 50px;
 }
 
+html { overflow: hidden; height: 100vh; }
 body { font-family: var(--font); background: var(--bg-deep); color: var(--text-primary); font-size: 13px; line-height: 1.6; overflow: hidden; -webkit-font-smoothing: antialiased; }
 
 /* ═══ Layout ═══ */
@@ -85,8 +86,27 @@ body { font-family: var(--font); background: var(--bg-deep); color: var(--text-p
 
 /* ═══ Content Area ═══ */
 .content-area {
-  flex: 1; overflow: auto; position: relative;
+  flex: 1;
+  position: relative;
+  overflow-y: scroll !important;
+  overflow-x: hidden;
+  scrollbar-gutter: stable;
+  padding-right: 0;
 }
+.content-area::-webkit-scrollbar {
+  width: 10px;
+  background: transparent;
+}
+.content-area::-webkit-scrollbar-track { background: transparent; }
+.content-area::-webkit-scrollbar-thumb {
+  background: rgba(255,255,255,0.08);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.content-area::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.2); background-clip: padding-box; border: 2px solid transparent; }
+/* 强制 webkit 使用 legacy/always-on scrollbar, 绕过 macOS overlay 行为 */
+.content-area { scrollbar-width: thin; }
 
 /* ═══ Page Transition ═══ */
 .page-enter { }
@@ -2907,10 +2927,14 @@ canvas { opacity: 1 !important; }
   display: flex;
   flex-direction: column;
   gap: 8px;
-  align-self: flex-start;
-  position: sticky;
-  top: 24px;
+  position: fixed;
+  top: 72px;
+  right: 32px;
+  max-height: calc(100vh - 96px);
+  overflow-y: auto;
+  z-index: 5;
 }
+.home-sidebar::-webkit-scrollbar { width: 0; display: none; }
 .home-bottom-row { display: none !important; }
 
 /* ═══ NEW TIMER ═══ */
@@ -3358,7 +3382,7 @@ canvas { opacity: 1 !important; }
 /* ═══ Fix: progress bar with milestones ═══ */
 
 /* ═══ HOME REDESIGN ═══ */
-@keyframes fadeIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
 
 /* Remove old home layout styles that conflict */
 .module-grid { display: none !important; }
@@ -3496,7 +3520,7 @@ canvas { opacity: 1 !important; }
 
 /* 步骤展开折叠 Grid Morph 动画 */
 .step-morph-row {
-  transition: transform 0.3s cubic-bezier(0.4,0,0.2,1), max-height 0.3s cubic-bezier(0.4,0,0.2,1), opacity 0.2s ease, margin 0.3s ease, padding 0.3s ease;
+  transition: opacity 0.2s ease;
   transform-origin: top;
   max-height: 60px;
   overflow: hidden;

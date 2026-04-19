@@ -1412,6 +1412,13 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [selectedStep, setSelectedStep] = useState<Record<string, number>>({});
   const [ctxMenu, setCtxMenu] = useState<{x: number; y: number; exp: any} | null>(null);
+  // 0 点自动重新分类: 监听 ClockWidget 广播的日期切换事件, 强制重渲染
+  const [, setDateTick] = React.useState(0);
+  React.useEffect(() => {
+    const onDateChange = () => setDateTick(t => t + 1);
+    window.addEventListener('biolab-date-change', onDateChange);
+    return () => window.removeEventListener('biolab-date-change', onDateChange);
+  }, []);
   const [stepEdit, setStepEdit] = useState<{exp: any; mi: number; day: string; label: string} | null>(null);
   const [addingHomeStep, setAddingHomeStep] = useState<{expId: string; exp: any; day: string; name: string; detail: string} | null>(null);
   const [addingHomeStepClosing, setAddingHomeStepClosing] = React.useState(false);
@@ -1461,6 +1468,54 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
   const [editingStepData, setEditingStepData] = useState<{day: string; label: string; detail: string; exp?: any; mi?: number}>({ day: '', label: '', detail: '' });
   const editingStepDataRef = React.useRef(editingStepData);
   React.useEffect(() => { editingStepDataRef.current = editingStepData; }, [editingStepData]);
+  // 方案 C: 每个展开步骤永远是编辑态,输入时写入 localStepEdits,防抖 500ms 写库
+  // localStepEdits: Map of stepKey -> { label, detail }
+  const [localStepEdits, setLocalStepEdits] = React.useState<Record<string, { label: string; detail: string }>>({});
+  const [editingDayKey, setEditingDayKey] = React.useState<string | null>(null);
+  const [editingDayValue, setEditingDayValue] = React.useState<string>('');
+  const stepSaveTimersRef = React.useRef<Record<string, any>>({});
+  const pendingStepWritesRef = React.useRef<Record<string, { exp: any; mi: number; day: number; label: string; detail: string }>>({});
+
+  const scheduleStepSave = (stepKey: string, exp: any, mi: number, day: number, label: string, detail: string) => {
+    pendingStepWritesRef.current[stepKey] = { exp, mi, day, label, detail };
+    if (stepSaveTimersRef.current[stepKey]) clearTimeout(stepSaveTimersRef.current[stepKey]);
+    stepSaveTimersRef.current[stepKey] = setTimeout(() => {
+      flushStepSave(stepKey);
+    }, 500);
+  };
+
+  const flushStepSave = async (stepKey: string) => {
+    const pending = pendingStepWritesRef.current[stepKey];
+    if (!pending) return;
+    delete pendingStepWritesRef.current[stepKey];
+    if (stepSaveTimersRef.current[stepKey]) {
+      clearTimeout(stepSaveTimersRef.current[stepKey]);
+      delete stepSaveTimersRef.current[stepKey];
+    }
+    try {
+      const { exp, mi, day, label, detail } = pending;
+      let tl: any = {};
+      try { tl = JSON.parse(exp.parameters || '{}'); } catch {}
+      const msArr = tl.milestones || [];
+      if (msArr[mi]) {
+        msArr[mi] = { ...msArr[mi], day, label: label.trim(), detail: detail.trim() };
+      }
+      msArr.sort((a: any, b: any) => a.day - b.day);
+      tl.milestones = msArr;
+      tl.duration_days = Math.max(...msArr.map((m: any) => m.day), 0) + 1;
+      const params = JSON.stringify(tl);
+      const stepsText = msArr.map((m: any) => 'D' + m.day + ': ' + m.label).join('\n');
+      const { invoke: inv } = await import('@tauri-apps/api/core');
+      await inv('update_experiment', { id: exp.id, title: exp.title, type: exp.type||'', date: exp.date||'', purpose: exp.purpose||'', materials: exp.materials||'', steps: stepsText, parameters: params, results: exp.results||'', conclusion: exp.conclusion||'', issues: exp.issues||'', nextSteps: exp.nextSteps||'', status: exp.status||'进行中' });
+      await useStore.getState().loadAll();
+    } catch(err) { console.error('flushStepSave failed:', err); }
+  };
+
+  const flushAllStepSaves = async () => {
+    const keys = Object.keys(pendingStepWritesRef.current);
+    for (const k of keys) await flushStepSave(k);
+  };
+
   const saveEditingStep = async () => {
     const ed = editingStepDataRef.current;
     if (!ed.exp || ed.mi === undefined) return;
@@ -1517,9 +1572,23 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
   };
   React.useEffect(() => {
     if (!ctxMenu) return;
-    const close = () => setCtxMenu(null);
-    const t = setTimeout(() => { window.addEventListener('click', close); window.addEventListener('scroll', close, true); }, 0);
-    return () => { clearTimeout(t); window.removeEventListener('click', close); window.removeEventListener('scroll', close, true); };
+    const cl = (ev: any) => {
+      const tg = ev?.target as HTMLElement | null;
+      if (tg && tg.closest && tg.closest('[data-exp-ctx-menu]')) return;
+      setCtxMenu(null);
+    };
+    const onScroll = () => setCtxMenu(null);
+    const t = setTimeout(() => {
+      document.addEventListener('mousedown', cl, true);
+      document.addEventListener('contextmenu', cl, true);
+      window.addEventListener('scroll', onScroll, true);
+    }, 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('mousedown', cl, true);
+      document.removeEventListener('contextmenu', cl, true);
+      window.removeEventListener('scroll', onScroll, true);
+    };
   }, [ctxMenu]);
 
   // Color palette for experiments (cycling)
@@ -1560,7 +1629,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
   const todayFull = (() => { const d = new Date(); return d.getFullYear() + '年' + (d.getMonth()+1) + '月' + d.getDate() + '日 ' + weekDays[d.getDay()]; })();
 
   return (
-    <div className="page-container" style={{ display: 'flex', gap: 24 }}>
+    <div className="page-container" style={{ display: 'flex', gap: 24, paddingRight: 300 }}>
       <style>{`
         .tl-col { padding-left: 80px; position: relative; }
         .tl-axis { position: absolute; left: 40px; top: 56px; bottom: 20px; width: 2px; background: #23232a; z-index: 0; border-radius: 1px; overflow: hidden; } .tl-axis::before { content: ''; position: absolute; left: 0; right: 0; top: -30%; height: 30%; background: linear-gradient(180deg, transparent, rgba(255,255,255,0.8) 50%, transparent); animation: biolabAxisFlow 4s linear infinite; } @keyframes biolabAxisFlow { 0% { top: -30%; } 100% { top: 100%; } }
@@ -1661,18 +1730,17 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
             background: '#18181b', borderRadius: 14, marginBottom: 12,
             border: '1px solid rgba(255,255,255,0.04)',
             borderTop: '3px solid rgba(255,255,255,0.12)',
-            transition: 'all 0.3s, transform 0.25s, box-shadow 0.25s',
+            transition: 'transform 0.25s ease, box-shadow 0.25s ease, border-color 0.3s ease, border-top-color 0.3s ease',
           }}
-            onContextMenu={(ev) => { if (isExpanded) return; ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }}
             onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; ev.currentTarget.style.borderTop = '3px solid ' + color.main + '55'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '1'; }}
             onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; ev.currentTarget.style.borderTop = '3px solid rgba(255,255,255,0.12)'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '0'; }}
           >
             {/* Collapsed card */}
-            <div style={{ padding: '16px 20px', cursor: 'pointer' }} onClick={() => setExpanded(isExpanded ? null : e.id)}>
+            <div style={{ padding: '16px 20px', cursor: 'pointer', background: 'transparent', transition: 'background 0.25s ease', borderTopLeftRadius: 14, borderTopRightRadius: 14 }} onClick={() => setExpanded(isExpanded ? null : e.id)} onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }} onMouseEnter={(ev: any) => { ev.currentTarget.style.background = 'linear-gradient(to bottom, ' + color.main + '30 0%, ' + color.main + '10 60%, transparent 100%)'; }} onMouseLeave={(ev: any) => { ev.currentTarget.style.background = 'transparent'; }}>
               {/* Row 1: name + remaining days */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: color.main }} />
+                  <div style={{ width: 14, height: 14, borderRadius: '50%', background: color.main }} />
                   <span style={{ fontSize: 14, fontWeight: 700, color: '#f0f0f2' }}>{e.title}</span>
                   {proj && <span style={{ fontSize: 11, color: '#d0d4dc' }}>{proj.name}</span>}
                 </div>
@@ -1733,7 +1801,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                         <div key={mi}>
                           {isFirstOfDay && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
-                              <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                              <div style={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
                               <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' }}>D{ms.day}</span>
                               <span style={{ fontSize: 10, flex: 1, color: isT ? color.main : '#606878' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
                               {isT && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
@@ -1749,40 +1817,99 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                             onClick={() => setExpandedStepKey(stepKey)}
                             onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}
                           >
-                            <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                            <div style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
                             <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
                           </div>
                           {/* 展开卡片 */}
                           <div className={'step-morph-card' + (isStepExpanded ? ' show' : '')}><div>
-                            <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
+                            <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 24px ' + color.main + '33, 0 4px 12px rgba(0,0,0,0.4)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-2px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
                               onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}>
-                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', height: 18, cursor: 'pointer' }}>
-                              </div>
-                              <button title="折叠" onClick={(ev) => { ev.stopPropagation(); if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 2, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s', zIndex: 2 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
-                              <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
+                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={() => { flushStepSave(stepKey).then(() => setExpandedStepKey(null)); }} style={{ position: 'relative', cursor: 'pointer', padding: '22px 12px 0 56px', background: hoveredStepKey === stepKey ? 'linear-gradient(to bottom, ' + color.main + '30 0%, ' + color.main + '10 70%, transparent 100%)' : 'transparent', transition: 'background 0.2s ease', borderTopLeftRadius: 8, borderTopRightRadius: 8 }}>
                                 <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
-                              {isEditing ? (
-                                <input data-step-edit-form autoFocus value={editingStepData.label} onChange={ev => setEditingStepData({ ...editingStepData, label: ev.target.value })} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                              </div>
+                              {editingDayKey === stepKey ? (
+                                <span onClick={(ev) => ev.stopPropagation()} style={{ position: 'absolute', top: 45, left: 8, zIndex: 3, fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  D<input autoFocus type="text" value={editingDayValue}
+                                    onChange={(ev) => {
+                                      const v = ev.target.value.replace(/[^0-9]/g, '');
+                                      setEditingDayValue(v);
+                                    }}
+                                    onClick={(ev) => ev.stopPropagation()}
+                                    onKeyDown={(ev: any) => {
+                                      if (ev.key === 'Enter') {
+                                        ev.preventDefault();
+                                        const raw = (ev.currentTarget?.value ?? '').replace(/[^0-9]/g, '');
+                                        const newDay = parseInt(raw);
+                                        if (!isNaN(newDay) && newDay !== ms.day) {
+                                          const curLabel = (localStepEdits[stepKey]?.label) ?? ms.label ?? '';
+                                          const curDetail = (localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '');
+                                          scheduleStepSave(stepKey, e, mi, newDay, curLabel, curDetail);
+                                          flushStepSave(stepKey);
+                                        }
+                                        setEditingDayKey(null);
+                                      } else if (ev.key === 'Escape') {
+                                        setEditingDayKey(null);
+                                      }
+                                    }}
+                                    onBlur={(ev: any) => {
+                                      const raw = (ev.currentTarget?.value ?? '').replace(/[^0-9]/g, '');
+                                      const newDay = parseInt(raw);
+                                      if (!isNaN(newDay) && newDay !== ms.day) {
+                                        const curLabel = (localStepEdits[stepKey]?.label) ?? ms.label ?? '';
+                                        const curDetail = (localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '');
+                                        scheduleStepSave(stepKey, e, mi, newDay, curLabel, curDetail);
+                                        flushStepSave(stepKey);
+                                      }
+                                      setEditingDayKey(null);
+                                    }}
+                                    style={{ width: 20, background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', textAlign: 'center', padding: 0 }} />
+                                </span>
                               ) : (
-                                <div style={{ fontSize: 14, fontWeight: 500, color: '#f0f0f2', marginBottom: 4 }}>{ms.label}</div>
+                                <span title="修改天数" onClick={(ev) => { ev.stopPropagation(); setEditingDayValue(String(ms.day)); setEditingDayKey(stepKey); }}
+                                  style={{ position: 'absolute', top: 45, left: 8, zIndex: 3, fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', boxSizing: 'border-box', cursor: 'pointer', transition: 'all 0.15s' }}
+                                  onMouseEnter={(ev: any) => { ev.currentTarget.style.background = isT ? color.main + '28' : 'rgba(255,255,255,0.06)'; ev.currentTarget.style.borderColor = isT ? color.main : 'rgba(255,255,255,0.25)'; }}
+                                  onMouseLeave={(ev: any) => { ev.currentTarget.style.background = isT ? color.light : 'rgba(255,255,255,0.02)'; ev.currentTarget.style.borderColor = isT ? color.main : 'rgba(255,255,255,0.1)'; }}>
+                                  D{ms.day}
+                                </span>
                               )}
+                              <button title="折叠" onClick={(ev) => { ev.stopPropagation(); flushStepSave(stepKey).then(() => setExpandedStepKey(null)); }} onMouseEnter={ev => { ev.currentTarget.style.color = '#7dd3fc'; ev.currentTarget.style.background = 'rgba(125,211,252,0.15)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.3)'; }} onMouseLeave={ev => { ev.currentTarget.style.color = '#606878'; ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.borderColor = 'transparent'; }} style={{ position: 'absolute', top: 4, left: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 6, cursor: 'pointer', padding: 4, color: '#606878', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s', zIndex: 2 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                              <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
+                                <input data-step-edit-form value={(localStepEdits[stepKey]?.label) ?? ms.label ?? ''}
+                                  onChange={ev => {
+                                    const newLabel = ev.target.value;
+                                    const curDetail = (localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '');
+                                    setLocalStepEdits(s => ({ ...s, [stepKey]: { label: newLabel, detail: curDetail } }));
+                                    scheduleStepSave(stepKey, e, mi, ms.day, newLabel, curDetail);
+                                  }}
+                                  onBlur={() => flushStepSave(stepKey)}
+                                  style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                                  onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                                  onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                                  onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                                  onBlurCapture={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                                />
                               </div>
                               <div style={{ padding: '0 12px 0 56px' }}>
-                              <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
-                              <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
-                              {isEditing ? (
-                                <textarea data-step-edit-form value={editingStepData.detail} onChange={ev => setEditingStepData({ ...editingStepData, detail: ev.target.value })} rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }} onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }} ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
-                              ) : (
-                                stepDetail ? <div style={{ fontSize: 12, color: '#8890a0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{stepDetail}</div> : <div style={{ fontSize: 12, color: '#4a5060', fontStyle: 'italic' }}>暂无具体操作</div>
-                              )}
-                              {isEditing ? (
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                                  
-                                  
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}{isT ? ' · 今天' : ''}</div>
-                              )}
+                                <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '8px 0 6px' }} />
+                                <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                                <textarea data-step-edit-form value={(localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '')}
+                                  placeholder="暂无具体操作"
+                                  onChange={ev => {
+                                    const newDetail = ev.target.value;
+                                    const curLabel = (localStepEdits[stepKey]?.label) ?? ms.label ?? '';
+                                    setLocalStepEdits(s => ({ ...s, [stepKey]: { label: curLabel, detail: newDetail } }));
+                                    scheduleStepSave(stepKey, e, mi, ms.day, curLabel, newDetail);
+                                  }}
+                                  onBlur={() => flushStepSave(stepKey)}
+                                  rows={2}
+                                  style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                                  onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                                  onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                                  onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                                  onBlurCapture={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                                  onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                                  ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+                                />
                               </div>
                             </div>
                           </div></div>
@@ -1798,7 +1925,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                   return (
                   <div className={'step-morph-card' + (addingHomeStepClosing ? '' : ' show')}><div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isAddToday ? color.main : '#3a3a40', boxShadow: isAddToday ? '0 0 6px ' + color.main : 'none' }} />
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0, border: '1.5px dashed ' + (isAddToday ? color.main : '#3a3a40'), background: 'transparent', boxSizing: 'border-box', boxShadow: isAddToday ? '0 0 6px ' + color.main + '55' : 'none' }} />
                       <span data-add-step-form style={{ fontSize: 11, color: isAddToday ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isAddToday ? color.main : 'rgba(255,255,255,0.1)'), background: isAddToday ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                         D<input data-add-step-form type="text" inputMode="numeric" value={addingHomeStep.day}
                           onChange={ev => setAddingHomeStep({ ...addingHomeStep, day: ev.target.value.replace(/[^0-9]/g, '') })}
@@ -1807,22 +1934,36 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                       <span style={{ fontSize: 10, flex: 1, color: isAddToday ? color.main : '#606878' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}</span>
                       {isAddToday && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
                     </div>
-                    <div data-add-step-form style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (addingHomeStepHover ? color.main + '55' : color.main + '40'), borderTop: '3px solid ' + (addingHomeStepHover ? color.main + '80' : color.main + '55'), boxShadow: addingHomeStepHover ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: addingHomeStepHover ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}>
-                      <div data-add-step-header onMouseEnter={() => setAddingHomeStepHover(true)} onMouseLeave={() => setAddingHomeStepHover(false)} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
+                    <div data-add-step-form style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (addingHomeStepHover ? color.main + '55' : color.main + '40'), borderTop: '3px solid ' + (addingHomeStepHover ? color.main + '80' : color.main + '55'), boxShadow: addingHomeStepHover ? '0 0 24px ' + color.main + '33, 0 4px 12px rgba(0,0,0,0.4)' : 'none', transform: addingHomeStepHover ? 'translateY(-2px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}>
+                      <div data-add-step-header onMouseEnter={() => setAddingHomeStepHover(true)} onMouseLeave={() => setAddingHomeStepHover(false)} style={{ position: 'relative', cursor: 'pointer', padding: '22px 12px 0 56px', background: addingHomeStepHover ? 'linear-gradient(to bottom, ' + color.main + '30 0%, ' + color.main + '10 70%, transparent 100%)' : 'transparent', transition: 'background 0.2s ease', borderTopLeftRadius: 8, borderTopRightRadius: 8 }}>
                         <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
-                        <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                      </div>
+                      <button data-add-step-header title="折叠" onMouseEnter={ev => { ev.currentTarget.style.color = '#7dd3fc'; ev.currentTarget.style.background = 'rgba(125,211,252,0.15)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.3)'; }} onMouseLeave={ev => { ev.currentTarget.style.color = '#606878'; ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.borderColor = 'transparent'; }} style={{ position: 'absolute', top: 4, left: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 6, cursor: 'pointer', padding: 4, color: '#606878', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s', zIndex: 2 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                      <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
+                        <input data-add-step-form autoFocus value={addingHomeStep.name} onChange={ev => setAddingHomeStep({ ...addingHomeStep, name: ev.target.value })}
+                          onKeyDown={ev => { if (ev.key === 'Escape') setAddingHomeStep(null); }}
+                          style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                          onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                          onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                          onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                          onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                        />
                       </div>
                       <div style={{ padding: '0 12px 0 56px' }}>
-                      <input data-add-step-form autoFocus value={addingHomeStep.name} onChange={ev => setAddingHomeStep({ ...addingHomeStep, name: ev.target.value })}
-                        onKeyDown={ev => { if (ev.key === 'Escape') setAddingHomeStep(null); }}
-                        style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
-                      <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
-                      <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
-                      <textarea data-add-step-form value={addingHomeStep.detail} onChange={ev => setAddingHomeStep({ ...addingHomeStep, detail: ev.target.value })}
-                        rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
-                        onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
-                        ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
-                      <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}{isAddToday ? ' · 今天' : ''}</div>
+                        <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '8px 0 6px' }} />
+                        <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                        <textarea data-add-step-form value={addingHomeStep.detail} onChange={ev => setAddingHomeStep({ ...addingHomeStep, detail: ev.target.value })}
+                          rows={2}
+                          placeholder="暂无具体操作"
+                          style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                          onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                          onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                          onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                          onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                          onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                          ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+                        />
+                        <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}{isAddToday ? ' · 今天' : ''}</div>
                       </div>
                     </div>
                   </div></div>
@@ -1833,10 +1974,10 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                   onMouseLeave={ev => ev.currentTarget.style.opacity = '0.4'}
                   onClick={() => {
                     const nextDay = String((sortedMs.length > 0 ? sortedMs[sortedMs.length-1].day : -1) + 1);
-                    setAddingHomeStep({ expId: e.id, exp: e, day: nextDay, name: '', detail: '' });
+                    (async () => { if (expandedStepKey) { await flushStepSave(expandedStepKey); setExpandedStepKey(null); } setAddingHomeStep({ expId: e.id, exp: e, day: nextDay, name: '', detail: '' }); })();
                   }}
                 >
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px dashed #3a3a40' }} />
+                  <div style={{ width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d0d4dc', fontSize: 16, lineHeight: 1, fontWeight: 300, flexShrink: 0 }}>+</div>
                   <span style={{ fontSize: 12, color: '#d0d4dc' }}>添加步骤</span>
                 </div>
                 )}
@@ -1908,18 +2049,17 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
             background: '#18181b', borderRadius: 14, marginBottom: 12,
             border: '1px solid rgba(255,255,255,0.04)',
             borderTop: '3px solid rgba(255,255,255,0.12)',
-            transition: 'all 0.3s, transform 0.25s, box-shadow 0.25s',
+            transition: 'transform 0.25s ease, box-shadow 0.25s ease, border-color 0.3s ease, border-top-color 0.3s ease',
           }}
-            onContextMenu={(ev) => { if (isExpanded) return; ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }}
             onMouseEnter={ev => { ev.currentTarget.style.transform = 'translateY(-2px)'; ev.currentTarget.style.boxShadow = '0 8px 24px rgba(0,0,0,0.3)'; ev.currentTarget.style.borderColor = color.main + '25'; ev.currentTarget.style.borderTop = '3px solid ' + color.main + '55'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '1'; }}
             onMouseLeave={ev => { ev.currentTarget.style.transform = 'translateY(0)'; ev.currentTarget.style.boxShadow = 'none'; ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; ev.currentTarget.style.borderTop = '3px solid rgba(255,255,255,0.12)'; const del = ev.currentTarget.querySelector('.home-exp-del') as HTMLElement; if (del) del.style.opacity = '0'; }}
           >
             {/* Collapsed card */}
-            <div style={{ padding: '16px 20px', cursor: 'pointer' }} onClick={() => setExpanded(isExpanded ? null : e.id)}>
+            <div style={{ padding: '16px 20px', cursor: 'pointer', background: 'transparent', transition: 'background 0.25s ease', borderTopLeftRadius: 14, borderTopRightRadius: 14 }} onClick={() => setExpanded(isExpanded ? null : e.id)} onContextMenu={(ev) => { ev.preventDefault(); ev.stopPropagation(); setCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e }); }} onMouseEnter={(ev: any) => { ev.currentTarget.style.background = 'linear-gradient(to bottom, ' + color.main + '30 0%, ' + color.main + '10 60%, transparent 100%)'; }} onMouseLeave={(ev: any) => { ev.currentTarget.style.background = 'transparent'; }}>
               {/* Row 1: name + remaining days */}
               <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  <div style={{ width: 10, height: 10, borderRadius: '50%', background: color.main }} />
+                  <div style={{ width: 14, height: 14, borderRadius: '50%', background: color.main }} />
                   <span style={{ fontSize: 14, fontWeight: 700, color: '#f0f0f2' }}>{e.title}</span>
                   {proj && <span style={{ fontSize: 11, color: '#d0d4dc' }}>{proj.name}</span>}
                 </div>
@@ -1980,7 +2120,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                         <div key={mi}>
                           {isFirstOfDay && (
                             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
-                              <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                              <div style={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
                               <span style={{ fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box' }}>D{ms.day}</span>
                               <span style={{ fontSize: 10, flex: 1, color: isT ? color.main : '#606878' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}</span>
                               {isT && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
@@ -1996,40 +2136,99 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                             onClick={() => setExpandedStepKey(stepKey)}
                             onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}
                           >
-                            <div style={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
+                            <div style={{ width: 6, height: 6, borderRadius: '50%', flexShrink: 0, background: isT ? color.main : '#3a3a40', boxShadow: isT ? '0 0 6px ' + color.main : 'none' }} />
                             <span style={{ fontSize: 13, color: isT ? color.main : isDone ? '#a0a0a8' : '#f0f0f2', fontWeight: isT ? 600 : 500, flex: 1, textDecoration: isDone ? 'line-through' : 'none', opacity: isDone ? 0.6 : 1 }}>{ms.label}</span>
                           </div>
                           {/* 展开卡片 */}
                           <div className={'step-morph-card' + (isStepExpanded ? ' show' : '')}><div>
-                            <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
+                            <div style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (hoveredStepKey === stepKey ? color.main + '55' : (isEditing ? color.main + '40' : color.main + '20')), borderTop: '3px solid ' + (hoveredStepKey === stepKey ? color.main + '80' : (isEditing ? color.main + '60' : color.main + '40')), boxShadow: hoveredStepKey === stepKey ? '0 0 24px ' + color.main + '33, 0 4px 12px rgba(0,0,0,0.4)' : 'none', transform: hoveredStepKey === stepKey ? 'translateY(-2px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}
                               onContextMenu={(ev: any) => { ev.preventDefault(); ev.stopPropagation(); setStepCtxMenu({ x: ev.clientX, y: ev.clientY, exp: e, mi, day: String(ms.day), label: ms.label }); }}>
-                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={(ev: any) => { if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} style={{ position: 'relative', height: 18, cursor: 'pointer' }}>
-                              </div>
-                              <button title="折叠" onClick={(ev) => { ev.stopPropagation(); if (isEditing) { saveEditingStep().then(() => { setEditingStepKey(null); setExpandedStepKey(null); }); } else { setExpandedStepKey(null); } }} onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 2, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s', zIndex: 2 }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
-                              <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
+                              <div data-step-edit-form onMouseEnter={() => setHoveredStepKey(stepKey)} onMouseLeave={() => setHoveredStepKey(null)} onClick={() => { flushStepSave(stepKey).then(() => setExpandedStepKey(null)); }} style={{ position: 'relative', cursor: 'pointer', padding: '22px 12px 0 56px', background: hoveredStepKey === stepKey ? 'linear-gradient(to bottom, ' + color.main + '30 0%, ' + color.main + '10 70%, transparent 100%)' : 'transparent', transition: 'background 0.2s ease', borderTopLeftRadius: 8, borderTopRightRadius: 8 }}>
                                 <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
-                              {isEditing ? (
-                                <input data-step-edit-form autoFocus value={editingStepData.label} onChange={ev => setEditingStepData({ ...editingStepData, label: ev.target.value })} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                              </div>
+                              {editingDayKey === stepKey ? (
+                                <span onClick={(ev) => ev.stopPropagation()} style={{ position: 'absolute', top: 45, left: 8, zIndex: 3, fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
+                                  D<input autoFocus type="text" value={editingDayValue}
+                                    onChange={(ev) => {
+                                      const v = ev.target.value.replace(/[^0-9]/g, '');
+                                      setEditingDayValue(v);
+                                    }}
+                                    onClick={(ev) => ev.stopPropagation()}
+                                    onKeyDown={(ev: any) => {
+                                      if (ev.key === 'Enter') {
+                                        ev.preventDefault();
+                                        const raw = (ev.currentTarget?.value ?? '').replace(/[^0-9]/g, '');
+                                        const newDay = parseInt(raw);
+                                        if (!isNaN(newDay) && newDay !== ms.day) {
+                                          const curLabel = (localStepEdits[stepKey]?.label) ?? ms.label ?? '';
+                                          const curDetail = (localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '');
+                                          scheduleStepSave(stepKey, e, mi, newDay, curLabel, curDetail);
+                                          flushStepSave(stepKey);
+                                        }
+                                        setEditingDayKey(null);
+                                      } else if (ev.key === 'Escape') {
+                                        setEditingDayKey(null);
+                                      }
+                                    }}
+                                    onBlur={(ev: any) => {
+                                      const raw = (ev.currentTarget?.value ?? '').replace(/[^0-9]/g, '');
+                                      const newDay = parseInt(raw);
+                                      if (!isNaN(newDay) && newDay !== ms.day) {
+                                        const curLabel = (localStepEdits[stepKey]?.label) ?? ms.label ?? '';
+                                        const curDetail = (localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '');
+                                        scheduleStepSave(stepKey, e, mi, newDay, curLabel, curDetail);
+                                        flushStepSave(stepKey);
+                                      }
+                                      setEditingDayKey(null);
+                                    }}
+                                    style={{ width: 20, background: 'transparent', border: 'none', outline: 'none', color: 'inherit', fontSize: 11, fontWeight: 700, fontFamily: 'inherit', textAlign: 'center', padding: 0 }} />
+                                </span>
                               ) : (
-                                <div style={{ fontSize: 14, fontWeight: 500, color: '#f0f0f2', marginBottom: 4 }}>{ms.label}</div>
+                                <span title="修改天数" onClick={(ev) => { ev.stopPropagation(); setEditingDayValue(String(ms.day)); setEditingDayKey(stepKey); }}
+                                  style={{ position: 'absolute', top: 45, left: 8, zIndex: 3, fontSize: 11, color: isT ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isT ? color.main : 'rgba(255,255,255,0.1)'), background: isT ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', boxSizing: 'border-box', cursor: 'pointer', transition: 'all 0.15s' }}
+                                  onMouseEnter={(ev: any) => { ev.currentTarget.style.background = isT ? color.main + '28' : 'rgba(255,255,255,0.06)'; ev.currentTarget.style.borderColor = isT ? color.main : 'rgba(255,255,255,0.25)'; }}
+                                  onMouseLeave={(ev: any) => { ev.currentTarget.style.background = isT ? color.light : 'rgba(255,255,255,0.02)'; ev.currentTarget.style.borderColor = isT ? color.main : 'rgba(255,255,255,0.1)'; }}>
+                                  D{ms.day}
+                                </span>
                               )}
+                              <button title="折叠" onClick={(ev) => { ev.stopPropagation(); flushStepSave(stepKey).then(() => setExpandedStepKey(null)); }} onMouseEnter={ev => { ev.currentTarget.style.color = '#7dd3fc'; ev.currentTarget.style.background = 'rgba(125,211,252,0.15)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.3)'; }} onMouseLeave={ev => { ev.currentTarget.style.color = '#606878'; ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.borderColor = 'transparent'; }} style={{ position: 'absolute', top: 4, left: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 6, cursor: 'pointer', padding: 4, color: '#606878', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s', zIndex: 2 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                              <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
+                                <input data-step-edit-form value={(localStepEdits[stepKey]?.label) ?? ms.label ?? ''}
+                                  onChange={ev => {
+                                    const newLabel = ev.target.value;
+                                    const curDetail = (localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '');
+                                    setLocalStepEdits(s => ({ ...s, [stepKey]: { label: newLabel, detail: curDetail } }));
+                                    scheduleStepSave(stepKey, e, mi, ms.day, newLabel, curDetail);
+                                  }}
+                                  onBlur={() => flushStepSave(stepKey)}
+                                  style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                                  onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                                  onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                                  onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                                  onBlurCapture={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                                />
                               </div>
                               <div style={{ padding: '0 12px 0 56px' }}>
-                              <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
-                              <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
-                              {isEditing ? (
-                                <textarea data-step-edit-form value={editingStepData.detail} onChange={ev => setEditingStepData({ ...editingStepData, detail: ev.target.value })} rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }} onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }} ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
-                              ) : (
-                                stepDetail ? <div style={{ fontSize: 12, color: '#8890a0', lineHeight: 1.6, whiteSpace: 'pre-wrap' }}>{stepDetail}</div> : <div style={{ fontSize: 12, color: '#4a5060', fontStyle: 'italic' }}>暂无具体操作</div>
-                              )}
-                              {isEditing ? (
-                                <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 8 }}>
-                                  
-                                  
-                                </div>
-                              ) : (
-                                <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{(msDate.getMonth()+1) + '月' + msDate.getDate() + '日 · ' + fmtWeek(msDate)}{isT ? ' · 今天' : ''}</div>
-                              )}
+                                <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '8px 0 6px' }} />
+                                <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                                <textarea data-step-edit-form value={(localStepEdits[stepKey]?.detail) ?? (stepDetail ?? '')}
+                                  placeholder="暂无具体操作"
+                                  onChange={ev => {
+                                    const newDetail = ev.target.value;
+                                    const curLabel = (localStepEdits[stepKey]?.label) ?? ms.label ?? '';
+                                    setLocalStepEdits(s => ({ ...s, [stepKey]: { label: curLabel, detail: newDetail } }));
+                                    scheduleStepSave(stepKey, e, mi, ms.day, curLabel, newDetail);
+                                  }}
+                                  onBlur={() => flushStepSave(stepKey)}
+                                  rows={2}
+                                  style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                                  onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                                  onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                                  onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                                  onBlurCapture={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                                  onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                                  ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+                                />
                               </div>
                             </div>
                           </div></div>
@@ -2045,7 +2244,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                   return (
                   <div className={'step-morph-card' + (addingHomeStepClosing ? '' : ' show')}><div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '5px 10px', marginBottom: 1 }}>
-                      <div style={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: isAddToday ? color.main : '#3a3a40', boxShadow: isAddToday ? '0 0 6px ' + color.main : 'none' }} />
+                      <div style={{ width: 10, height: 10, borderRadius: '50%', flexShrink: 0, border: '1.5px dashed ' + (isAddToday ? color.main : '#3a3a40'), background: 'transparent', boxSizing: 'border-box', boxShadow: isAddToday ? '0 0 6px ' + color.main + '55' : 'none' }} />
                       <span data-add-step-form style={{ fontSize: 11, color: isAddToday ? color.main : '#a0a0a8', fontVariantNumeric: 'tabular-nums', fontWeight: 700, padding: '3px 0', borderRadius: 6, border: '1px solid ' + (isAddToday ? color.main : 'rgba(255,255,255,0.1)'), background: isAddToday ? color.light : 'rgba(255,255,255,0.02)', width: 44, textAlign: 'center', flexShrink: 0, boxSizing: 'border-box', display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>
                         D<input data-add-step-form type="text" inputMode="numeric" value={addingHomeStep.day}
                           onChange={ev => setAddingHomeStep({ ...addingHomeStep, day: ev.target.value.replace(/[^0-9]/g, '') })}
@@ -2054,22 +2253,36 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                       <span style={{ fontSize: 10, flex: 1, color: isAddToday ? color.main : '#606878' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}</span>
                       {isAddToday && <span style={{ fontSize: 9, background: 'rgba(125,211,252,0.15)', color: '#7dd3fc', padding: '2px 6px', borderRadius: 3, border: '1px solid rgba(125,211,252,0.25)' }}>今天</span>}
                     </div>
-                    <div data-add-step-form style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (addingHomeStepHover ? color.main + '55' : color.main + '40'), borderTop: '3px solid ' + (addingHomeStepHover ? color.main + '80' : color.main + '55'), boxShadow: addingHomeStepHover ? '0 0 18px ' + color.main + '22, 0 2px 8px rgba(0,0,0,0.3)' : 'none', transform: addingHomeStepHover ? 'translateY(-1px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}>
-                      <div data-add-step-header onMouseEnter={() => setAddingHomeStepHover(true)} onMouseLeave={() => setAddingHomeStepHover(false)} style={{ position: 'relative', padding: '8px 12px 2px 56px', cursor: 'pointer' }}>
+                    <div data-add-step-form style={{ position: 'relative', padding: '0 0 8px 0', borderRadius: 8, background: '#1e2028', border: '1px solid ' + (addingHomeStepHover ? color.main + '55' : color.main + '40'), borderTop: '3px solid ' + (addingHomeStepHover ? color.main + '80' : color.main + '55'), boxShadow: addingHomeStepHover ? '0 0 24px ' + color.main + '33, 0 4px 12px rgba(0,0,0,0.4)' : 'none', transform: addingHomeStepHover ? 'translateY(-2px)' : 'translateY(0)', transition: 'border-color 0.25s ease, box-shadow 0.25s ease, transform 0.25s ease', margin: '2px 0 4px' }}>
+                      <div data-add-step-header onMouseEnter={() => setAddingHomeStepHover(true)} onMouseLeave={() => setAddingHomeStepHover(false)} style={{ position: 'relative', cursor: 'pointer', padding: '22px 12px 0 56px', background: addingHomeStepHover ? 'linear-gradient(to bottom, ' + color.main + '30 0%, ' + color.main + '10 70%, transparent 100%)' : 'transparent', transition: 'background 0.2s ease', borderTopLeftRadius: 8, borderTopRightRadius: 8 }}>
                         <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>步骤标题</div>
-                        <button title="折叠" onMouseEnter={ev => ev.currentTarget.style.color = '#d0d4dc'} onMouseLeave={ev => ev.currentTarget.style.color = '#606878'} style={{ position: 'absolute', top: 6, right: 8, background: 'transparent', border: 'none', cursor: 'pointer', padding: 2, color: '#606878', display: 'flex', alignItems: 'center', transition: 'color 0.15s' }}><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                      </div>
+                      <button data-add-step-header title="折叠" onMouseEnter={ev => { ev.currentTarget.style.color = '#7dd3fc'; ev.currentTarget.style.background = 'rgba(125,211,252,0.15)'; ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.3)'; }} onMouseLeave={ev => { ev.currentTarget.style.color = '#606878'; ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.borderColor = 'transparent'; }} style={{ position: 'absolute', top: 4, left: 8, background: 'transparent', border: '1px solid transparent', borderRadius: 6, cursor: 'pointer', padding: 4, color: '#606878', display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s', zIndex: 2 }}><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="18 15 12 9 6 15"/></svg></button>
+                      <div style={{ position: 'relative', padding: '0 12px 2px 56px' }}>
+                        <input data-add-step-form autoFocus value={addingHomeStep.name} onChange={ev => setAddingHomeStep({ ...addingHomeStep, name: ev.target.value })}
+                          onKeyDown={ev => { if (ev.key === 'Escape') setAddingHomeStep(null); }}
+                          style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                          onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                          onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                          onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                          onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                        />
                       </div>
                       <div style={{ padding: '0 12px 0 56px' }}>
-                      <input data-add-step-form autoFocus value={addingHomeStep.name} onChange={ev => setAddingHomeStep({ ...addingHomeStep, name: ev.target.value })}
-                        onKeyDown={ev => { if (ev.key === 'Escape') setAddingHomeStep(null); }}
-                        style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
-                      <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '4px 0 6px' }} />
-                      <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
-                      <textarea data-add-step-form value={addingHomeStep.detail} onChange={ev => setAddingHomeStep({ ...addingHomeStep, detail: ev.target.value })}
-                        rows={2} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
-                        onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
-                        ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
-                      <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}{isAddToday ? ' · 今天' : ''}</div>
+                        <div style={{ height: 1, background: 'rgba(255,255,255,0.05)', margin: '8px 0 6px' }} />
+                        <div style={{ fontSize: 10, color: '#606878', marginBottom: 2 }}>具体操作</div>
+                        <textarea data-add-step-form value={addingHomeStep.detail} onChange={ev => setAddingHomeStep({ ...addingHomeStep, detail: ev.target.value })}
+                          rows={2}
+                          placeholder="暂无具体操作"
+                          style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
+                          onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                          onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                          onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                          onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                          onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
+                          ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }}
+                        />
+                        <div style={{ fontSize: 10, color: '#606878', marginTop: 6, textAlign: 'right' }}>{isNaN(addDay) ? '' : ((addDate.getMonth()+1) + '月' + addDate.getDate() + '日 · ' + fmtWeek(addDate))}{isAddToday ? ' · 今天' : ''}</div>
                       </div>
                     </div>
                   </div></div>
@@ -2080,10 +2293,10 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
                   onMouseLeave={ev => ev.currentTarget.style.opacity = '0.4'}
                   onClick={() => {
                     const nextDay = String((sortedMs.length > 0 ? sortedMs[sortedMs.length-1].day : -1) + 1);
-                    setAddingHomeStep({ expId: e.id, exp: e, day: nextDay, name: '', detail: '' });
+                    (async () => { if (expandedStepKey) { await flushStepSave(expandedStepKey); setExpandedStepKey(null); } setAddingHomeStep({ expId: e.id, exp: e, day: nextDay, name: '', detail: '' }); })();
                   }}
                 >
-                  <div style={{ width: 8, height: 8, borderRadius: '50%', border: '1.5px dashed #3a3a40' }} />
+                  <div style={{ width: 14, height: 14, display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#d0d4dc', fontSize: 16, lineHeight: 1, fontWeight: 300, flexShrink: 0 }}>+</div>
                   <span style={{ fontSize: 12, color: '#d0d4dc' }}>添加步骤</span>
                 </div>
                 )}
@@ -2107,12 +2320,6 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
       </div>
       {stepCtxMenu && createPortal(
         <div data-step-ctx-menu style={{ position: 'fixed', left: Math.min(stepCtxMenu.x, window.innerWidth - 140), top: Math.min(stepCtxMenu.y, window.innerHeight - 90), zIndex: 99999, background: '#1a1a1f', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: 4, minWidth: 120, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }} onClick={(e) => e.stopPropagation()}>
-          <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
-            onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
-            onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
-            onClick={() => { const s = stepCtxMenu; setStepCtxMenu(null); const key = s.exp.id + '-' + s.mi; setExpandedStepKey(key); setEditingStepKey(key); let detail = ''; try { const tlp = JSON.parse(s.exp.parameters || '{}'); detail = (tlp.milestones || [])[s.mi]?.detail || ''; } catch {} setEditingStepData({ day: s.day, label: s.label, detail, exp: s.exp, mi: s.mi }); }}
-          >编辑</div>
-          <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '4px 0' }} />
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#fc8181', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(252,129,129,0.12)'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; }}
@@ -2139,7 +2346,7 @@ function HomePage({ onAction }: { onAction: (t: string) => void }) {
         </div>
       )}
       {ctxMenu && (
-        <div style={{ position: 'fixed', left: Math.min(ctxMenu.x, window.innerWidth - 140), top: Math.min(ctxMenu.y, window.innerHeight - 90), zIndex: 99999, background: '#1a1a1f', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: 4, minWidth: 120, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
+        <div data-exp-ctx-menu style={{ position: 'fixed', left: Math.min(ctxMenu.x, window.innerWidth - 140), top: Math.min(ctxMenu.y, window.innerHeight - 90), zIndex: 99999, background: '#1a1a1f', border: '1px solid rgba(255,255,255,0.08)', borderRadius: 8, padding: 4, minWidth: 120, boxShadow: '0 8px 24px rgba(0,0,0,0.5)' }} onClick={(e) => e.stopPropagation()} onContextMenu={(e) => e.preventDefault()}>
           <div style={{ padding: '8px 14px', fontSize: 13, color: '#e8eaed', cursor: 'pointer', borderRadius: 4, transition: 'background 0.15s' }}
             onMouseEnter={(ev) => { ev.currentTarget.style.background = 'rgba(125,211,252,0.12)'; ev.currentTarget.style.color = '#7dd3fc'; }}
             onMouseLeave={(ev) => { ev.currentTarget.style.background = 'transparent'; ev.currentTarget.style.color = '#e8eaed'; }}
@@ -2574,6 +2781,33 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
     });
   };
   const stepsList = React.useMemo(() => parseSteps(exp?.steps || ''), [exp?.steps]);
+
+  // Local editable copy of stepsList: 输入时只更新本地,防抖 500ms 后才真正写库
+  // 避免每次 keystroke 调 backend + loadAll,导致 input 闪烁/光标丢失/输入被回滚
+  const [localSteps, setLocalSteps] = React.useState(stepsList);
+  const isLocalEditingRef = React.useRef(false);
+  React.useEffect(() => {
+    if (isLocalEditingRef.current) return;  // 用户正在编辑时不覆盖
+    setLocalSteps(stepsList);
+  }, [stepsList]);
+  const saveTimerRef = React.useRef<any>(null);
+  const scheduleSave = (ns: any[]) => {
+    isLocalEditingRef.current = true;
+    setLocalSteps(ns);
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    saveTimerRef.current = setTimeout(() => {
+      isLocalEditingRef.current = false;
+      saveSteps(ns);
+    }, 500);
+  };
+  const flushSaveNow = () => {
+    if (saveTimerRef.current) {
+      clearTimeout(saveTimerRef.current);
+      saveTimerRef.current = null;
+      isLocalEditingRef.current = false;
+      saveSteps(localSteps);
+    }
+  };
   const [editingStep, setEditingStep] = useState<{si:number; field:'day'|'name'|'detail'; val:string}|null>(null);
   const [addingStep, setAddingStep] = useState<{day:string; name:string; detail:string}|null>(null);
   const commitEditingStep = () => {
@@ -2849,9 +3083,9 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
               {activeSec.key === 'steps' ? (() => {
                 return (
                   <div>
-                    {stepsList.map((step, si) => {
-                      const sameDayAsPrev = si > 0 && stepsList[si-1].day === step.day;
-                      const isLast = si === stepsList.length - 1;
+                    {localSteps.map((step: any, si: number) => {
+                      const sameDayAsPrev = si > 0 && localSteps[si-1].day === step.day;
+                      const isLast = si === localSteps.length - 1;
                       return (
                       <div key={si} style={{ display: 'flex', alignItems: 'flex-start', gap: 0, marginBottom: 8 }}>
                         <div style={{ width: 42, display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, visibility: sameDayAsPrev ? 'hidden' : 'visible' }}>
@@ -2877,18 +3111,25 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
                           onMouseEnter={ev => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.15)'; const del = ev.currentTarget.querySelector('[data-step-del]') as HTMLElement; if (del) del.style.opacity = '1'; }}
                           onMouseLeave={ev => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.04)'; const del = ev.currentTarget.querySelector('[data-step-del]') as HTMLElement; if (del) del.style.opacity = '0'; }}>
                           <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>步骤标题</div>
-                          <input value={step.name} onChange={ev => { const ns = [...stepsList]; ns[si] = { ...ns[si], name: ev.target.value }; saveSteps(ns); }}
-                            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                          <input value={step.name} onChange={ev => { const ns = [...localSteps]; ns[si] = { ...ns[si], name: ev.target.value }; scheduleSave(ns); }} onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; flushSaveNow(); }}
+                            onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                            onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                            onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                            style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }} />
                           <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '6px 0' }} />
                           <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>具体操作</div>
-                          <textarea value={step.detail || ''} onChange={ev => { const ns = [...stepsList]; ns[si] = { ...ns[si], detail: ev.target.value }; saveSteps(ns); }}
-                            rows={1} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
+                          <textarea value={step.detail || ''} onChange={ev => { const ns = [...localSteps]; ns[si] = { ...ns[si], detail: ev.target.value }; scheduleSave(ns); }} onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; flushSaveNow(); }}
+                            onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                            onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                            onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                            placeholder="暂无具体操作"
+                            rows={1} style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
                             onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
                             ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
-                          <div data-step-del="" style={{ position: 'absolute', top: '50%', right: 10, transform: 'translateY(-50%)', width: 28, height: 28, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0, transition: 'all 0.2s', color: '#d0d4dc', fontSize: 14, background: 'rgba(252,129,129,0.08)', border: '1px solid rgba(252,129,129,0.2)' }}
-                            onClick={() => { const ns = stepsList.filter((_: any, i: number) => i !== si); saveSteps(ns); }}
+                          <div data-step-del="" title="删除步骤" style={{ position: 'absolute', top: 2, right: 6, width: 22, height: 22, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', opacity: 0, transition: 'all 0.2s', color: '#d0d4dc', background: 'rgba(252,129,129,0.08)', border: '1px solid rgba(252,129,129,0.2)', zIndex: 2 }}
+                            onClick={() => { const ns = localSteps.filter((_: any, i: number) => i !== si); flushSaveNow(); saveSteps(ns); setLocalSteps(ns); }}
                             onMouseEnter={ev => { ev.currentTarget.style.color = '#fc8181'; ev.currentTarget.style.background = 'rgba(252,129,129,0.18)'; ev.currentTarget.style.borderColor = '#fc8181'; }}
-                            onMouseLeave={ev => { ev.currentTarget.style.color = '#d0d4dc'; ev.currentTarget.style.background = 'rgba(252,129,129,0.08)'; ev.currentTarget.style.borderColor = 'rgba(252,129,129,0.2)'; }}>✕</div>
+                            onMouseLeave={ev => { ev.currentTarget.style.color = '#d0d4dc'; ev.currentTarget.style.background = 'rgba(252,129,129,0.08)'; ev.currentTarget.style.borderColor = 'rgba(252,129,129,0.2)'; }}><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></div>
                         </div>
                       </div>
                       );
@@ -2906,11 +3147,20 @@ function TimelineCard({ timeline, daysPassed, dayPct, onSave, expType, startDate
                           <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>步骤标题</div>
                           <input autoFocus value={addingStep.name} onChange={ev => setAddingStep({ ...addingStep, name: ev.target.value })}
                             onKeyDown={ev => { if (ev.key === 'Escape') setAddingStep(null); }}
-                            style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: 0 }} />
+                            onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                            onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                            onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                            onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                            style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#f0f0f2', fontSize: 14, fontWeight: 500, fontFamily: 'inherit', boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }} />
                           <div style={{ height: 1, background: 'rgba(255,255,255,0.06)', margin: '6px 0' }} />
                           <div style={{ fontSize: 11, color: '#606878', marginBottom: 3 }}>具体操作</div>
                           <textarea value={addingStep.detail} onChange={ev => setAddingStep({ ...addingStep, detail: ev.target.value })}
-                            rows={1} style={{ width: '100%', background: 'transparent', border: 'none', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: 0 }}
+                            onFocus={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(125,211,252,0.35)'; ev.currentTarget.style.background = 'rgba(125,211,252,0.04)'; }}
+                            onBlur={(ev: any) => { ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; ev.currentTarget.style.background = 'rgba(255,255,255,0.02)'; }}
+                            onMouseEnter={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.2)'; }}
+                            onMouseLeave={(ev: any) => { if (document.activeElement !== ev.currentTarget) ev.currentTarget.style.borderColor = 'rgba(255,255,255,0.08)'; }}
+                            placeholder="暂无具体操作"
+                            rows={1} style={{ width: '100%', background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.08)', outline: 'none', color: '#8890a0', fontSize: 12, fontFamily: 'inherit', resize: 'none', overflow: 'hidden', lineHeight: 1.6, boxSizing: 'border-box', padding: '6px 8px', borderRadius: 4, transition: 'border-color 0.15s, background 0.15s' }}
                             onInput={(ev: any) => { ev.target.style.height = 'auto'; ev.target.style.height = ev.target.scrollHeight + 'px'; }}
                             ref={(el: any) => { if (el) { el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; } }} />
                           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8, marginTop: 10 }}>
@@ -3779,7 +4029,7 @@ function TopbarTime() {
   const hh = String(tzNow.getHours()).padStart(2, '0');
   const mm = String(tzNow.getMinutes()).padStart(2, '0');
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 14, fontSize: 15, color: '#ffffff', fontFamily: "'Times New Roman', '等线', 'DengXian', Times, serif", fontVariantNumeric: 'tabular-nums', userSelect: 'none', fontWeight: 700, letterSpacing: '0.02em', textShadow: '0 0 8px rgba(255,255,255,0.25)' }}>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginRight: 14, fontSize: 15, color: '#ffffff', fontFamily: 'Arial, sans-serif', fontVariantNumeric: 'tabular-nums', userSelect: 'none', fontWeight: 700, letterSpacing: '0.02em', textShadow: '0 0 8px rgba(255,255,255,0.25)' }}>
       <span style={{ color: 'inherit', opacity: 1, fontWeight: 'inherit' }}>{month}月{date}日</span>
       <span style={{ color: 'inherit', opacity: 1, fontWeight: 'inherit' }}>{weekday}</span>
       <span style={{ color: 'inherit', opacity: 1, fontWeight: 'inherit' }}>{hh}:{mm}</span>
